@@ -213,7 +213,7 @@
 
 .hbe-input-field-default:focus + .hbe-input-label-default .hbe-input-label-content-default,
 .hbe-input--filled .hbe-input-label-default .hbe-input-label-content-default {
-	color: #555555;
+	color: #111111;
 	-webkit-transform: translate3d(0, 2.1em, 0) scale3d(0.65, 0.65, 1);
 	transform: translate3d(0, 2.1em, 0) scale3d(0.65, 0.65, 1);
 }
