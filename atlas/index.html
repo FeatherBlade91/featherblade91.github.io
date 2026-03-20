@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Atlas</title>
+  <link rel="stylesheet" href="./assets/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <h1>Atlas</h1>
+        <p>脑暴、重组、延伸记录</p>
+      </div>
+
+      <section class="panel">
+        <h2>视图</h2>
+        <div class="segmented">
+          <button class="seg active" data-view="ideas">Daily Ideas</button>
+          <button class="seg" data-view="crosslinks">Crosslinks</button>
+          <button class="seg" data-view="concepts">Concepts</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>筛选</h2>
+        <input id="searchInput" placeholder="搜索标题 / 来源 / 关键词" />
+        <select id="categoryFilter">
+          <option value="">全部分类</option>
+          <option value="选题">选题</option>
+          <option value="文稿">文稿</option>
+          <option value="idea">idea</option>
+        </select>
+        <select id="dateSort">
+          <option value="desc">时间：最新优先</option>
+          <option value="asc">时间：最早优先</option>
+        </select>
+      </section>
+
+      <section class="panel">
+        <h2>工作台</h2>
+        <p class="muted">点击卡片上的“加入工作台”，再拖拽排序，适合临时组合灵感。</p>
+        <div id="workspaceDrop" class="workspace-drop">把卡片送到这里</div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2 id="viewTitle">Daily Ideas</h2>
+          <p id="viewDesc">按卡片浏览每日灵感，不做时间轴，只保留时间标签。</p>
+        </div>
+        <div class="stats" id="stats"></div>
+      </header>
+
+      <section id="cardGrid" class="grid"></section>
+    </main>
+
+    <aside class="detail">
+      <section class="panel detail-panel">
+        <h2>详情</h2>
+        <div id="detailBody" class="detail-body muted">点击任一卡片查看详情。</div>
+      </section>
+      <section class="panel detail-panel">
+        <h2>组合工作台</h2>
+        <div id="workspaceList" class="workspace-list"></div>
+      </section>
+    </aside>
+  </div>
+
+  <template id="cardTemplate">
+    <article class="card" draggable="true">
+      <div class="meta-row">
+        <span class="pill type"></span>
+        <span class="pill date"></span>
+      </div>
+      <h3 class="title"></h3>
+      <p class="snippet"></p>
+      <div class="tags"></div>
+      <div class="card-actions">
+        <button class="ghost detail-btn">查看</button>
+        <button class="ghost add-btn">加入工作台</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="./scripts/app.js"></script>
+</body>
+</html>
