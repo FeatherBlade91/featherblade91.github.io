@@ -304,16 +304,22 @@ const Ring = {
 
 /* ---------- 星河漫游 ----------
  * 照片散落在一条 3D 隧道里，相机匀速向前穿梭；
- * 飞过身后的照片被回收送到隧道尽头，形成无尽星海。 */
+ * 飞过身后的照片被回收送到隧道尽头，形成无尽星海。
+ * 背景层：canvas 星幕（带深度视差与闪烁）+ 沿途的星云与小行星，
+ * 它们同样沿隧道排布、飞过身后即回收，偶尔还有流星划过。 */
 const Galaxy = {
   DEPTH: 7000,         // 隧道总长（px）
   VISIBLE_DEPTH: 5200, // 超过这个深度的照片隐藏且不加载，控制内存和流量
+  PERSPECTIVE: 900,    // 与 .galaxy-stage 的 perspective 保持一致
   cam: 0,
   speed: 2.4,
   speedBoost: 0,
   lookX: 0,
   lookY: 0,
   items: [], // { el, img, src, x, y, z, i, visible, loaded }
+  deco: [],  // 背景装饰（星云 / 行星）：{ el, kind, x, y, z, visible }
+  stars: [], // 星幕粒子
+  nextShoot: 0,
   running: false,
   init() {
     this.stage = $("#galaxyStage");
@@ -344,6 +350,11 @@ const Galaxy = {
       this.place(it);
       this.items.push(it);
     });
+
+    // 背景层：星幕 → 星云 → 小行星
+    this.initStarfield();
+    this.initNebulas();
+    this.initPlanets();
 
     // 拖拽环顾四周（不用 setPointerCapture，否则会抢走照片上的 click）
     let lastX = 0, lastY = 0, dragging = false;
@@ -402,6 +413,9 @@ const Galaxy = {
             }
           }
         }
+        this.updateDeco();
+        this.drawStars();
+        this.maybeShoot();
       }
       requestAnimationFrame(loop);
     };
@@ -411,6 +425,207 @@ const Galaxy = {
     it.el.style.transform =
       `translate(-50%, -50%) translate3d(${it.x}vw, ${it.y}vh, ${-it.z}px)`;
   },
+
+  /* ----- 背景：星幕 canvas -----
+   * 星星分布在隧道圆柱空间里，每帧按相机深度做透视投影，
+   * 飞过身后的回收送到尽头，带闪烁与少量十字星芒。 */
+  initStarfield() {
+    const cv = el("canvas");
+    cv.id = "galaxyStars";
+    cv.setAttribute("aria-hidden", "true");
+    this.stage.insertBefore(cv, this.space);
+    this.starCv = cv;
+    this.starCtx = cv.getContext("2d");
+    const STAR_COLORS = ["#ffffff", "#ffffff", "#ffffff", "#aedcff", "#ffc6de", "#d9ccff"];
+    const resize = () => {
+      cv.width = this.stage.clientWidth;
+      cv.height = this.stage.clientHeight;
+      const N = cv.width < 768 ? 190 : 460;
+      this.stars = Array.from({ length: N }, () => ({
+        dx: rand(-1, 1) * cv.width * 0.85,  // 单位深度处的方向偏移（px）
+        dy: rand(-1, 1) * cv.height * 0.85,
+        z: rand(80, this.DEPTH),
+        r: rand(0.5, 1.7),
+        tw: rand(0.6, 2.2),                 // 闪烁频率
+        ph: rand(0, Math.PI * 2),           // 闪烁相位
+        c: STAR_COLORS[(Math.random() * STAR_COLORS.length) | 0],
+        bright: Math.random() < 0.08,       // 少量亮星画星芒
+      }));
+    };
+    resize();
+    addEventListener("resize", resize);
+  },
+  drawStars() {
+    const g = this.starCtx;
+    if (!g) return;
+    const cv = this.starCv;
+    const W = cv.width, H = cv.height;
+    const cx = W / 2, cy = H / 2, P = this.PERSPECTIVE;
+    const t = performance.now() / 1000;
+    // 拖拽环顾时星幕也跟着轻微视差
+    const ox = Math.tan((this.lookX * Math.PI) / 180) * P;
+    const oy = Math.tan((this.lookY * Math.PI) / 180) * P;
+    g.clearRect(0, 0, W, H);
+    for (const s of this.stars) {
+      let rel = s.z - this.cam;
+      if (rel < 60) { s.z += this.DEPTH; rel = s.z - this.cam; }
+      const sc = P / rel;
+      const x = cx + (s.dx - ox) * sc;
+      const y = cy + (s.dy - oy) * sc;
+      if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
+      const a = (0.38 + 0.62 * Math.abs(Math.sin(t * s.tw + s.ph))) * Math.min(1, sc * 1.4);
+      const r = Math.min(3, s.r * sc);
+      g.globalAlpha = a;
+      g.fillStyle = s.c;
+      g.beginPath();
+      g.arc(x, y, r, 0, 6.2832);
+      g.fill();
+      if (s.bright && sc > 0.35) {
+        // 亮星的十字星芒
+        const L = r * 4;
+        g.globalAlpha = a * 0.55;
+        g.fillRect(x - L, y - 0.5, L * 2, 1);
+        g.fillRect(x - 0.5, y - L, 1, L * 2);
+      }
+    }
+    g.globalAlpha = 1;
+  },
+
+  /* ----- 背景：星云 -----
+   * 大团柔和的彩色雾气，沿隧道错落排布，相机从中穿过。 */
+  initNebulas() {
+    const TINTS = [
+      ["rgba(255, 158, 199, 0.20)", 2200],
+      ["rgba(127, 184, 240, 0.22)", 2400],
+      ["rgba(179, 154, 232, 0.20)", 2000],
+      ["rgba(127, 224, 200, 0.13)", 1800],
+      ["rgba(240, 185, 120, 0.13)", 1600],
+      ["rgba(255, 158, 199, 0.15)", 1900],
+      ["rgba(159, 210, 255, 0.17)", 2300],
+    ];
+    TINTS.forEach(([tint, size], i) => {
+      const d = el("div", "galaxy-nebula");
+      d.style.width = d.style.height = size + "px";
+      d.style.background = `radial-gradient(circle, ${tint} 0%, transparent 68%)`;
+      d.style.visibility = "hidden";
+      this.space.appendChild(d);
+      const it = {
+        el: d, kind: "nebula",
+        x: rand(-85, 85),
+        y: rand(-58, 58),
+        z: 500 + i * (this.DEPTH / TINTS.length) + rand(0, 500),
+        visible: false,
+      };
+      this.place(it);
+      this.deco.push(it);
+    });
+  },
+
+  /* ----- 背景：小行星 -----
+   * 纯 CSS 绘制的迷你行星（条纹球体 + 可选光环 + 辉光），
+   * 挂在隧道两侧，各自轻轻摇晃，不与照片抢位置。 */
+  initPlanets() {
+    const gas = (c1, c2, c3) =>
+      `linear-gradient(172deg, ${c1} 0%, ${c2} 14%, ${c1} 26%, ${c3} 38%, ${c2} 50%, ${c1} 60%, ${c2} 72%, ${c3} 84%, ${c1} 100%)`;
+    const stripe = (c1, c2, c3) =>
+      `linear-gradient(176deg, ${c2} 0%, ${c1} 8%, ${c3} 14%, ${c1} 22%, ${c2} 30%, ${c1} 40%, ${c3} 47%, ${c1} 56%, ${c2} 66%, ${c1} 75%, ${c3} 82%, ${c1} 90%, ${c2} 100%)`;
+    const PLANETS = [
+      { size: 118, bands: stripe("#ffe3ef", "#ff9ec7", "#d36ba4"), glow: "rgba(255, 158, 199, 0.30)",
+        ring: { w: 2.2, tilt: -18, c: "rgba(255, 190, 222, 0.55)", soft: "rgba(255, 190, 222, 0.12)", hi: "rgba(255, 235, 245, 0.75)" } },
+      { size: 92, bands: gas("#cfe8ff", "#7fb8f0", "#3f6fb8"), glow: "rgba(127, 184, 240, 0.30)" },
+      { size: 62, bands: gas("#e9dfff", "#b39ae8", "#6f4fb0"), glow: "rgba(179, 154, 232, 0.30)",
+        ring: { w: 2.35, tilt: 14, c: "rgba(205, 190, 255, 0.50)", soft: "rgba(205, 190, 255, 0.12)", hi: "rgba(240, 235, 255, 0.70)" } },
+      { size: 100, bands: stripe("#ffedd6", "#f0b978", "#b97c3f"), glow: "rgba(240, 185, 120, 0.28)",
+        ring: { w: 2.1, tilt: -26, c: "rgba(240, 205, 150, 0.50)", soft: "rgba(240, 205, 150, 0.12)", hi: "rgba(255, 240, 215, 0.70)" } },
+      { size: 54, bands: gas("#d8fff4", "#7fe0c8", "#3a9f8a"), glow: "rgba(127, 224, 200, 0.28)" },
+      { size: 70, bands: gas("#ffd9d2", "#f0949a", "#a8506e"), glow: "rgba(240, 148, 154, 0.28)" },
+      { size: 84, bands: gas("#d6ecff", "#8fc7f5", "#4a5fa8"), glow: "rgba(143, 199, 245, 0.30)",
+        ring: { w: 2.25, tilt: -8, c: "rgba(160, 210, 250, 0.50)", soft: "rgba(160, 210, 250, 0.12)", hi: "rgba(230, 245, 255, 0.70)" } },
+      { size: 60, bands: stripe("#f3e6ff", "#cfa8f0", "#8a5fc0"), glow: "rgba(207, 168, 240, 0.30)" },
+    ];
+    PLANETS.forEach((cfg, i) => {
+      const d = el("div", "galaxy-planet");
+      d.style.setProperty("--size", cfg.size + "px");
+      d.style.setProperty("--bands", cfg.bands);
+      d.style.setProperty("--glow", cfg.glow);
+      const sway = el("div", "p-sway");
+      sway.style.animationDuration = rand(7, 12) + "s";
+      sway.style.animationDelay = rand(-12, 0) + "s";
+      if (cfg.ring) {
+        d.style.setProperty("--ring-w", cfg.ring.w);
+        d.style.setProperty("--ring-tilt", cfg.ring.tilt + "deg");
+        d.style.setProperty("--ring-c", cfg.ring.c);
+        d.style.setProperty("--ring-c-soft", cfg.ring.soft);
+        d.style.setProperty("--ring-c-hi", cfg.ring.hi);
+        sway.appendChild(el("div", "p-halo"));
+        sway.appendChild(el("div", "p-ring p-ring-back"));
+        sway.appendChild(el("div", "p-body"));
+        sway.appendChild(el("div", "p-ring p-ring-front"));
+      } else {
+        sway.appendChild(el("div", "p-halo"));
+        sway.appendChild(el("div", "p-body"));
+      }
+      d.appendChild(sway);
+      d.style.visibility = "hidden";
+      this.space.appendChild(d);
+      const it = {
+        el: d, kind: "planet",
+        // 挂在隧道两侧，躲开中间的照片带
+        x: rand(52, 78) * (i % 2 ? -1 : 1),
+        y: rand(-40, 40),
+        z: 900 + i * (this.DEPTH / PLANETS.length) + rand(0, 400),
+        visible: false,
+      };
+      this.place(it);
+      this.deco.push(it);
+    });
+  },
+
+  /* 星云与行星随相机回收、显隐（不牵涉图片加载，逻辑比照片简单） */
+  updateDeco() {
+    for (const it of this.deco) {
+      const rel = it.z - this.cam;
+      if (rel < -300) {
+        it.z += this.DEPTH;
+        if (it.kind === "planet") {
+          it.x = rand(52, 78) * (Math.random() < 0.5 ? -1 : 1);
+          it.y = rand(-40, 40);
+        } else {
+          it.x = rand(-85, 85);
+          it.y = rand(-58, 58);
+        }
+        this.place(it);
+        it.visible = false;
+        it.el.style.visibility = "hidden";
+        continue;
+      }
+      const vis = rel < this.VISIBLE_DEPTH;
+      if (vis !== it.visible) {
+        it.visible = vis;
+        it.el.style.visibility = vis ? "" : "hidden";
+      }
+    }
+  },
+
+  /* ----- 背景：偶尔划过的流星 ----- */
+  maybeShoot() {
+    const now = performance.now();
+    if (now < this.nextShoot) return;
+    this.nextShoot = now + rand(6000, 14000);
+    const s = el("div", "shooting-star");
+    // 朝左下或右下坠落
+    const ang = Math.random() < 0.5 ? rand(20, 65) : rand(115, 160);
+    const dist = rand(320, 620);
+    const rad = (ang * Math.PI) / 180;
+    s.style.setProperty("--ang", ang + "deg");
+    s.style.setProperty("--dx", Math.cos(rad) * dist + "px");
+    s.style.setProperty("--dy", Math.sin(rad) * dist + "px");
+    s.style.left = rand(10, 90) + "%";
+    s.style.top = rand(4, 45) + "%";
+    s.addEventListener("animationend", () => s.remove());
+    this.stage.appendChild(s);
+  },
+
   enter() { this.running = true; },
   leave() { this.running = false; },
 };

@@ -43,7 +43,7 @@ const SITE_CONFIG = {
     { date: "05-20", title: "520 告白日" },
   ],
 
-  // 背景音乐：使用 WebAudio 合成的八音盒旋律，无需任何音频文件
+  // 背景音乐：播放 music/bgm.mp3（循环）
   music: {
     enabled: true,
     volume: 0.5, // 0 ~ 1

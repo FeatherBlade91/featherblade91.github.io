@@ -10,7 +10,7 @@
 - 🎡 **3D 旋转相册**：照片围成立体圆环（每批 14 张，可「换一批」），可拖拽旋转、上下调视角、带倒影
 - 🌌 **星河漫游**：照片散落在 3D 隧道里，相机自动穿梭，拖拽环顾、滚轮加速
 - 🎞 **全屏幻灯片**：无边框全屏自动播放，淡入淡出 + Ken Burns 缩放，显示照片名称，支持触屏滑动
-- 🎵 **背景音乐**：WebAudio 合成的八音盒旋律，无需音频文件
+- 🎵 **背景音乐**：循环播放 `music/bgm.mp3`
 - ⚙ **管理端**（`admin.html`）：
   - **本地导入**：把照片直接写进本地项目文件夹，JPG 自动读取 EXIF 拍摄日期
   - **在线上传**：输入 GitHub Token，浏览器里直接把新照片提交到仓库
@@ -46,9 +46,13 @@ python -m http.server 8000
 项目里的 `.deploy/` 是主站仓库 `featherblade91.github.io` 的本地克隆，
 相册部署在其中的 `foreverU3/` 子目录：
 
-1. 把本项目文件（`index.html`、`admin.html`、`css/`、`js/`、`photos/`、`photos.json`）
+1. 把本项目文件（`index.html`、`admin.html`、`css/`、`js/`、`photos/`、`thumbs/`、`photos.json`）
    复制到 `.deploy/foreverU3/`。
 2. 在 `.deploy/` 里 `git add -A && git commit && git push`。
+
+> ⚠ 主站的 Hexo 部署会**强制覆盖整个仓库历史**（但 `foreverU3/` 内容会保留）。
+> 如果 `git push` 被拒（non-fast-forward），说明 Hexo 刚部署过，在 `.deploy/` 里执行
+> `git fetch origin && git reset --hard origin/master`，再重新复制本项 目文件、提交、推送即可。
 
 等 1~2 分钟，访问 <https://featherblade91.github.io/foreverU3>。
 （文件都在子目录里，不会影响主站首页。）

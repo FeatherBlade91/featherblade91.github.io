@@ -323,9 +323,10 @@ body[data-mode="slideshow"] .bg-glow { display: none; }
   overflow: hidden; cursor: grab; user-select: none; touch-action: none;
   perspective: 900px;
   background:
-    radial-gradient(ellipse at 50% 120%, rgba(255, 179, 209, 0.25), transparent 60%),
-    radial-gradient(ellipse at 50% -20%, rgba(143, 199, 245, 0.3), transparent 60%),
-    linear-gradient(160deg, #1c2440 0%, #2b2a4e 45%, #3d2c50 100%);
+    radial-gradient(ellipse 70% 55% at 72% 18%, rgba(96, 68, 158, 0.4), transparent 62%),
+    radial-gradient(ellipse 65% 55% at 18% 82%, rgba(52, 96, 168, 0.32), transparent 65%),
+    radial-gradient(ellipse 55% 45% at 45% 55%, rgba(255, 158, 199, 0.07), transparent 70%),
+    linear-gradient(168deg, #04060f 0%, #0a0e22 38%, #191232 72%, #0b0919 100%);
 }
 .galaxy-stage:active { cursor: grabbing; }
 .galaxy-space {
@@ -343,6 +344,81 @@ body[data-mode="slideshow"] .bg-glow { display: none; }
 }
 .galaxy-photo:hover { filter: brightness(1.15); }
 .galaxy-photo img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+
+/* --- 星河背景：星幕 canvas --- */
+#galaxyStars {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+}
+
+/* --- 星河背景：星云 --- */
+.galaxy-nebula {
+  position: absolute; left: 0; top: 0;
+  border-radius: 50%; pointer-events: none;
+  will-change: transform;
+}
+
+/* --- 星河背景：小行星（纯 CSS 球体 + 可选光环） --- */
+.galaxy-planet {
+  position: absolute; left: 0; top: 0; pointer-events: none;
+}
+.p-sway {
+  position: absolute; left: 0; top: 0;
+  animation: pSway 9s ease-in-out infinite;
+}
+@keyframes pSway {
+  0%, 100% { transform: translateY(-9px) rotate(-2deg); }
+  50% { transform: translateY(9px) rotate(2.2deg); }
+}
+.p-halo {
+  position: absolute; left: 50%; top: 50%; z-index: 0;
+  width: calc(var(--size) * 2.4); height: calc(var(--size) * 2.4);
+  border-radius: 50%; transform: translate(-50%, -50%);
+  background: radial-gradient(circle, var(--glow) 0%, transparent 62%);
+}
+.p-body {
+  position: absolute; left: 50%; top: 50%; z-index: 2;
+  width: var(--size); height: var(--size);
+  border-radius: 50%; transform: translate(-50%, -50%);
+  background:
+    radial-gradient(circle at 31% 27%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 46%),
+    var(--bands);
+  /* 右下背光阴影 + 左上的受光面，造出球体体积感 */
+  box-shadow:
+    inset calc(var(--size) * -0.17) calc(var(--size) * -0.12) calc(var(--size) * 0.38) rgba(7, 5, 24, 0.66),
+    inset calc(var(--size) * 0.05) calc(var(--size) * 0.05) calc(var(--size) * 0.2) rgba(255, 255, 255, 0.28),
+    0 0 calc(var(--size) * 0.5) var(--glow);
+}
+.p-ring {
+  position: absolute; left: 50%; top: 50%;
+  width: calc(var(--size) * var(--ring-w)); height: calc(var(--size) * var(--ring-w));
+  border-radius: 50%;
+  transform: translate(-50%, -50%) rotateZ(var(--ring-tilt)) rotateX(74deg);
+  background: radial-gradient(circle,
+    transparent 51%,
+    var(--ring-c-soft) 57%,
+    var(--ring-c) 62%,
+    var(--ring-c-hi) 66%,
+    var(--ring-c) 71%,
+    transparent 77%);
+}
+.p-ring-back { z-index: 1; }
+/* 前景半环：只保留下半圈，让光环从星球前方绕过 */
+.p-ring-front { z-index: 3; clip-path: inset(50% 0 0 0); }
+
+/* --- 星河背景：流星 --- */
+.shooting-star {
+  position: absolute; z-index: 2;
+  width: 150px; height: 2px; border-radius: 2px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(174, 220, 255, 0.4) 45%, rgba(255, 255, 255, 0.95));
+  transform: rotate(var(--ang));
+  animation: shoot 1s ease-out forwards;
+}
+@keyframes shoot {
+  from { opacity: 0; translate: 0 0; }
+  12% { opacity: 1; }
+  to { opacity: 0; translate: var(--dx) var(--dy); }
+}
 .galaxy-vignette {
   position: absolute; inset: 0; pointer-events: none; z-index: 2;
   background: radial-gradient(ellipse at center, transparent 55%, rgba(12, 16, 34, 0.55) 100%);
