@@ -219,14 +219,15 @@ const Ring = {
     addEventListener("resize", () => this.layout());
 
     let lastX = 0, lastY = 0;
+    // 注意：不要用 setPointerCapture——它会把 click 重定向到 stage，
+    // 导致卡片上的点击放大永远触发不了
     stage.addEventListener("pointerdown", (e) => {
       this.dragging = true;
       this.moved = false;
       lastX = e.clientX;
       lastY = e.clientY;
-      stage.setPointerCapture(e.pointerId);
     });
-    stage.addEventListener("pointermove", (e) => {
+    window.addEventListener("pointermove", (e) => {
       if (!this.dragging) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
@@ -238,8 +239,8 @@ const Ring = {
       this.tilt = Math.max(-24, Math.min(14, this.tilt - dy * 0.08));
     });
     const end = () => { this.dragging = false; };
-    stage.addEventListener("pointerup", end);
-    stage.addEventListener("pointercancel", end);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
 
     const stepDeg = 360 / this.SLOTS;
     const loop = () => {
@@ -344,16 +345,15 @@ const Galaxy = {
       this.items.push(it);
     });
 
-    // 拖拽环顾四周
+    // 拖拽环顾四周（不用 setPointerCapture，否则会抢走照片上的 click）
     let lastX = 0, lastY = 0, dragging = false;
     this.stage.addEventListener("pointerdown", (e) => {
       dragging = true;
       this.moved = false;
       lastX = e.clientX;
       lastY = e.clientY;
-      this.stage.setPointerCapture(e.pointerId);
     });
-    this.stage.addEventListener("pointermove", (e) => {
+    window.addEventListener("pointermove", (e) => {
       if (!dragging) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
@@ -364,8 +364,8 @@ const Galaxy = {
       this.lookY = Math.max(-24, Math.min(24, this.lookY - dy * 0.06));
     });
     const end = () => { dragging = false; };
-    this.stage.addEventListener("pointerup", end);
-    this.stage.addEventListener("pointercancel", end);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
     // 滚轮加速 / 减速穿梭
     this.stage.addEventListener("wheel", (e) => {
       e.preventDefault();
