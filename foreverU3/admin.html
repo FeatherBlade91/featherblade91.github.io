@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>相册管理 · LYK ♥ DMY</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💗</text></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+  <div class="bg-gradient"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div id="bubbles" class="bubbles" aria-hidden="true"></div>
+
+  <a class="float-btn back-btn" href="index.html" title="返回相册">←</a>
+
+  <main class="admin-wrap">
+    <h1 class="page-title">相册管理</h1>
+    <p class="page-desc">上传的照片会直接提交到 GitHub 仓库，几分钟后线上相册自动更新</p>
+
+    <!-- 本地导入（离线预览） -->
+    <section class="admin-card glass">
+      <h2>本地相册（离线管理，不用联网）</h2>
+      <p class="hint" style="margin-top:0">
+        选定项目文件夹后，自动列出 <code>photos/</code> 里的全部照片：
+        新照片标记为「待登记」，JPG 自动读取 EXIF 拍摄日期。
+        日期和标题都可以留空，留空的词条在相册里不会显示。
+        需要 Chrome / Edge，且本地用 <code>python -m http.server</code> 方式打开本页。
+      </p>
+      <div class="row-actions" style="margin-top:14px">
+        <button class="btn-ghost" id="btnPickDir">选择项目文件夹（index.html 所在的目录）</button>
+        <button class="btn-ghost" id="btnRescan" hidden>重新扫描</button>
+        <span class="status-ok" id="localDirName"></span>
+      </div>
+      <div id="localBody" hidden>
+        <div id="localList" class="photo-list" style="margin-top:16px"></div>
+        <div class="row-actions">
+          <button class="btn-primary" id="btnLocalSave">保存到 photos.json 🫧</button>
+          <span class="hint" id="localSummary"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 仓库连接 -->
+    <section class="admin-card glass">
+      <h2>① 连接仓库（上传到线上）</h2>
+      <div class="form-grid">
+        <label>用户名<input id="inOwner" placeholder="featherblade91" /></label>
+        <label>仓库名<input id="inRepo" placeholder="featherblade91.github.io" /></label>
+        <label>分支<input id="inBranch" placeholder="main" /></label>
+        <label class="span-all">
+          Token（fine-grained PAT，需 Contents 读写权限）
+          <input id="inToken" type="password" placeholder="github_pat_..." autocomplete="off" />
+        </label>
+      </div>
+      <div class="row-actions">
+        <button class="btn-primary" id="btnConnect">连接并读取相册</button>
+        <label class="chk"><input type="checkbox" id="chkSaveToken" /> 在此浏览器记住 Token</label>
+      </div>
+      <p class="hint">Token 只保存在你自己浏览器的 localStorage 里，不会发送到 GitHub 之外的任何地方。</p>
+    </section>
+
+    <!-- 上传新照片 -->
+    <section class="admin-card glass" id="uploadCard" hidden>
+      <h2>② 上传新照片</h2>
+      <label class="drop-zone" id="dropZone">
+        <input type="file" id="inFiles" accept="image/*" multiple hidden />
+        <span class="dz-icon">🫧</span>
+        <span>点击选择或拖拽照片到这里（可多选）</span>
+      </label>
+      <div id="previewList" class="preview-list"></div>
+      <div class="row-actions">
+        <button class="btn-primary" id="btnUpload" disabled>提交到 GitHub 💌</button>
+      </div>
+    </section>
+
+    <!-- 现有照片 -->
+    <section class="admin-card glass" id="listCard" hidden>
+      <h2>③ 管理现有照片</h2>
+      <div id="photoList" class="photo-list"></div>
+      <div class="row-actions">
+        <button class="btn-ghost" id="btnSaveManifest">保存修改（日期 / 文案 / 删除）</button>
+      </div>
+    </section>
+
+    <!-- 日志 -->
+    <section class="admin-card glass" id="logCard" hidden>
+      <h2>提交日志</h2>
+      <pre id="log" class="log"></pre>
+    </section>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LYK ♥ DMY · 我们的恋爱相册</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💗</text></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- ===== 背景层 ===== -->
+  <div class="bg-gradient"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="bg-glow bg-glow-3"></div>
+  <div id="bubbles" class="bubbles" aria-hidden="true"></div>
+  <canvas id="starlight" aria-hidden="true"></canvas>
+
+  <!-- ===== 悬浮控件 ===== -->
+  <button id="musicToggle" class="float-btn music-btn" title="播放 / 暂停音乐" aria-label="音乐开关">
+    <span class="music-note">♪</span>
+  </button>
+  <a class="float-btn admin-btn" href="admin.html" title="管理相册">⚙</a>
+
+  <!-- ===== 模式导航 ===== -->
+  <nav class="mode-nav" id="modeNav">
+    <button class="nav-pill active" data-mode="home">🏠 首页</button>
+    <button class="nav-pill" data-mode="ring">🎡 3D 相册</button>
+    <button class="nav-pill" data-mode="slideshow">🎞 幻灯片</button>
+    <button class="nav-pill" data-mode="heart">💗 爱心墙</button>
+    <button class="nav-pill" data-mode="timeline">📖 时间轴</button>
+    <button class="nav-pill" data-mode="drift">🫧 泡泡漂流</button>
+  </nav>
+
+  <main id="app">
+
+    <!-- ===== 首页 ===== -->
+    <section class="mode-page active" id="page-home">
+      <div class="hero">
+        <div class="hero-badge">✦ Our Love Story ✦</div>
+        <h1 class="hero-names">
+          <span class="name name-him">LYK</span>
+          <span class="hero-heart" id="heroHeart">
+            <svg viewBox="0 0 100 92" width="1em" height="0.92em" aria-hidden="true">
+              <defs>
+                <linearGradient id="heartGrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#8fc7f5"/>
+                  <stop offset="0.5" stop-color="#d9b3f0"/>
+                  <stop offset="1" stop-color="#ff9ec7"/>
+                </linearGradient>
+              </defs>
+              <path fill="url(#heartGrad)" d="M50 84 C22 62 4 44 4 26 C4 11 15 3 27 3 C37 3 45 9 50 18 C55 9 63 3 73 3 C85 3 96 11 96 26 C96 44 78 62 50 84 Z"/>
+              <ellipse cx="32" cy="22" rx="10" ry="6" fill="#ffffff" opacity="0.55" transform="rotate(-20 32 22)"/>
+            </svg>
+          </span>
+          <span class="name name-her">DMY</span>
+        </h1>
+        <p class="hero-subtitle" id="heroSubtitle"></p>
+
+        <div class="timer-card glass">
+          <div class="timer-label">我们已经在一起</div>
+          <div class="timer-grid" id="loveTimer">
+            <div class="timer-cell"><span class="timer-num" data-unit="days">0</span><span class="timer-unit">天</span></div>
+            <div class="timer-cell"><span class="timer-num" data-unit="hours">0</span><span class="timer-unit">时</span></div>
+            <div class="timer-cell"><span class="timer-num" data-unit="minutes">0</span><span class="timer-unit">分</span></div>
+            <div class="timer-cell"><span class="timer-num" data-unit="seconds">0</span><span class="timer-unit">秒</span></div>
+          </div>
+          <div class="milestone-tip" id="milestoneTip"></div>
+        </div>
+
+        <div class="hero-actions">
+          <button class="btn-primary" id="openLetter">💌 悄悄话</button>
+          <button class="btn-ghost" data-goto="ring">开始逛相册 →</button>
+        </div>
+      </div>
+      <div class="scroll-hint">✦ 点击上方导航，切换不同的看照片姿势 ✦</div>
+    </section>
+
+    <!-- ===== 3D 旋转相册 ===== -->
+    <section class="mode-page" id="page-ring">
+      <h2 class="page-title">3D 旋转相册</h2>
+      <p class="page-desc">按住拖拽，让回忆转起来</p>
+      <div class="ring-stage" id="ringStage">
+        <div class="ring" id="ring"></div>
+      </div>
+      <div class="ring-hint">🖱 拖拽旋转 · 点击照片放大</div>
+    </section>
+
+    <!-- ===== 幻灯片 ===== -->
+    <section class="mode-page" id="page-slideshow">
+      <div class="slide-box" id="slideBox">
+        <div class="slide-layer" id="slideA"></div>
+        <div class="slide-layer" id="slideB"></div>
+        <div class="slide-caption glass" id="slideCaption"></div>
+        <div class="slide-controls">
+          <button class="slide-btn" id="slidePrev">‹</button>
+          <button class="slide-btn" id="slidePlay">⏸</button>
+          <button class="slide-btn" id="slideNext">›</button>
+        </div>
+        <div class="slide-dots" id="slideDots"></div>
+      </div>
+    </section>
+
+    <!-- ===== 爱心照片墙 ===== -->
+    <section class="mode-page" id="page-heart">
+      <h2 class="page-title">爱心照片墙</h2>
+      <p class="page-desc">每一张照片，都是心动的一次跳动</p>
+      <div class="heart-wall" id="heartWall">
+        <div class="heart-core"></div>
+      </div>
+    </section>
+
+    <!-- ===== 时间轴 ===== -->
+    <section class="mode-page" id="page-timeline">
+      <h2 class="page-title">恋爱时间轴</h2>
+      <p class="page-desc">顺着时间，把故事再讲一遍</p>
+      <div class="timeline" id="timeline">
+        <div class="timeline-line"></div>
+      </div>
+    </section>
+
+    <!-- ===== 泡泡漂流 ===== -->
+    <section class="mode-page" id="page-drift">
+      <h2 class="page-title">泡泡漂流</h2>
+      <p class="page-desc">照片住进了泡泡里，戳开一个看看</p>
+      <div class="drift-field" id="driftField"></div>
+    </section>
+
+  </main>
+
+  <!-- ===== 照片灯箱 ===== -->
+  <div class="lightbox" id="lightbox">
+    <button class="lb-close" id="lbClose">✕</button>
+    <button class="lb-arrow lb-prev" id="lbPrev">‹</button>
+    <figure class="lb-figure">
+      <img id="lbImg" alt="" />
+      <figcaption class="lb-caption" id="lbCaption"></figcaption>
+    </figure>
+    <button class="lb-arrow lb-next" id="lbNext">›</button>
+  </div>
+
+  <!-- ===== 悄悄话弹窗 ===== -->
+  <div class="letter-modal" id="letterModal">
+    <div class="petals" id="petals"></div>
+    <div class="letter-card">
+      <button class="letter-close" id="letterClose">✕</button>
+      <div class="letter-seal">❤</div>
+      <h3 class="letter-title" id="letterTitle"></h3>
+      <div class="letter-body" id="letterBody"></div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/music.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
