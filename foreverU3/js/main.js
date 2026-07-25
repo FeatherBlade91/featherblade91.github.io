@@ -199,26 +199,24 @@ function initHome() {
   setInterval(tick, 1000);
 }
 
-/* ---------- 3D 旋转相册 ----------
- * 注意：translateZ 的半径必须小于 stage 的 perspective，
- * 否则卡片会跑到“相机后面”被裁掉（之前啥也看不到就是这个原因）。
- * 照片很多时一批一批地上环，保证半径始终合理。 */
+/* ---------- 3D 旋转相册（无限环） ----------
+ * 卡片等距围成圆环，相机位置 cam 连续推进；
+ * 飞到后半环的卡片被回收到前进方向的最前端并换上新照片，
+ * 因此拖动可以无限持续、照片一张张接续上来。
+ * 注意：半径必须小于 stage 的 perspective，否则卡片会跑到“相机后面”被裁掉。 */
 const Ring = {
-  angle: 0,
-  velocity: 0.12,
+  SLOTS: 30,        // 环上同时存在的卡片数
+  cam: 0,           // 相机位置（单位：卡槽）
+  velocity: -0.012, // 单位：卡槽 / 帧
   tilt: -6,
   dragging: false,
-  batch: 0,
-  PER_RING: 14,
+  slots: [],        // { el, img, pos, photoIdx }
+  radius: 0,
   init() {
     this.ring = $("#ring");
     const stage = $("#ringStage");
     this.build();
-    $("#ringShuffle").addEventListener("click", () => {
-      this.batch++;
-      this.build();
-    });
-    addEventListener("resize", () => this.build());
+    addEventListener("resize", () => this.layout());
 
     let lastX = 0, lastY = 0;
     stage.addEventListener("pointerdown", (e) => {
@@ -235,52 +233,71 @@ const Ring = {
       lastX = e.clientX;
       lastY = e.clientY;
       if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
-      this.velocity = dx * 0.15;
-      this.angle += dx * 0.25;
+      this.velocity = dx * 0.012;
+      this.cam -= dx * 0.012;
       this.tilt = Math.max(-24, Math.min(14, this.tilt - dy * 0.08));
     });
     const end = () => { this.dragging = false; };
     stage.addEventListener("pointerup", end);
     stage.addEventListener("pointercancel", end);
 
+    const stepDeg = 360 / this.SLOTS;
     const loop = () => {
       if (!this.dragging) {
         // 惯性衰减 + 默认缓慢自转，视角缓慢回正
-        this.velocity += (0.12 - this.velocity) * 0.02;
-        this.angle += this.velocity;
+        this.velocity += (-0.012 - this.velocity) * 0.02;
+        this.cam -= this.velocity;
         this.tilt += (-6 - this.tilt) * 0.02;
       }
-      this.ring.style.transform = `rotateX(${this.tilt}deg) rotateY(${this.angle}deg)`;
+      this.ring.style.transform = `rotateX(${this.tilt}deg)`;
+      const half = this.SLOTS / 2;
+      for (const s of this.slots) {
+        let rel = s.pos - this.cam;
+        // 回收：落到后半环的卡片跳到前进方向最前端，换上接续的照片
+        if (rel < -half) { s.pos += this.SLOTS; this.assign(s); rel = s.pos - this.cam; }
+        else if (rel >= half) { s.pos -= this.SLOTS; this.assign(s); rel = s.pos - this.cam; }
+        const deg = rel * stepDeg;
+        s.el.style.transform = `rotateY(${deg}deg) translateZ(${this.radius}px)`;
+        // 正面亮、背面暗一点，增强立体感
+        const c = Math.cos((deg * Math.PI) / 180);
+        s.el.style.filter = `brightness(${(0.72 + 0.28 * Math.max(0, c)).toFixed(3)})`;
+      }
       requestAnimationFrame(loop);
     };
     loop();
   },
   build() {
     if (!PHOTOS.length) return;
-    const n = Math.min(this.PER_RING, PHOTOS.length);
-    const totalBatches = Math.ceil(PHOTOS.length / n);
-    this.batch = ((this.batch % totalBatches) + totalBatches) % totalBatches;
-    const cardW = this.ring.clientWidth || 260;
-    const radius = Math.round((cardW / 2 + 20) / Math.tan(Math.PI / n));
     this.ring.innerHTML = "";
-    for (let k = 0; k < n; k++) {
-      const gi = (this.batch * n + k) % PHOTOS.length;
-      const p = PHOTOS[gi];
+    this.slots = [];
+    for (let i = 0; i < this.SLOTS; i++) {
       const card = el("div", "ring-card");
-      card.style.transform = `rotateY(${(360 / n) * k}deg) translateZ(${radius}px)`;
       const img = el("img");
-      img.alt = photoName(p);
       img.loading = "lazy";
-      setThumb(img, p);
-      card.appendChild(img);
       const cap = el("div", "ring-caption");
-      cap.textContent = photoName(p);
+      card.appendChild(img);
       card.appendChild(cap);
+      const s = { el: card, img, cap, pos: i, photoIdx: -1 };
       card.addEventListener("click", () => {
-        if (!this.moved) Lightbox.open(gi);
+        if (!this.moved && s.photoIdx >= 0) Lightbox.open(s.photoIdx);
       });
       this.ring.appendChild(card);
+      this.slots.push(s);
+      this.assign(s);
     }
+    this.layout();
+  },
+  layout() {
+    const cardW = this.ring.clientWidth || 170;
+    this.radius = Math.round((cardW / 2 + 14) / Math.tan(Math.PI / this.SLOTS));
+  },
+  assign(s) {
+    const total = PHOTOS.length;
+    s.photoIdx = ((s.pos % total) + total) % total;
+    const p = PHOTOS[s.photoIdx];
+    s.img.alt = photoName(p);
+    setThumb(s.img, p);
+    s.cap.textContent = photoName(p);
   },
 };
 
