@@ -10,18 +10,18 @@ const SITE_CONFIG = {
   anniversaryDate: "2025-08-26",
 
   // GitHub 仓库信息（管理端上传照片用，Token 不会写在这里，只在浏览器本地保存）
-  // 本站作为主站的子页面部署在 featherblade91.github.io/U3forever
+  // 本站作为主站的子页面部署在 featherblade91.github.io/foreverU3
   repo: {
     owner: "featherblade91",
     name: "featherblade91.github.io",
     branch: "master",
-    pathPrefix: "U3forever", // 仓库内子目录；若用独立仓库部署则改为 ""
+    pathPrefix: "foreverU3", // 仓库内子目录；若用独立仓库部署则改为 ""
   },
 
   // 首页副标题
   subtitle: "把每一个平凡的日常，都过成值得收藏的浪漫",
 
-  // 悄悄话（首页点击爱心信封弹出）
+  // 悄悄话（首页左下角有个淡淡的小信封 💌，点它弹出——故意藏起来的）
   loveLetter: {
     title: "To 我最爱的 DMY",
     // 每段一行，打字机效果逐行显示

@@ -1,21 +1,23 @@
-# LYK ♥ DMY · 梦幻恋爱相册（U3forever）
+# LYK ♥ DMY · 梦幻恋爱相册（foreverU3）
 
 纯静态情侣电子相册，作为 `featherblade91.github.io` 主站的子页面部署在
-**<https://featherblade91.github.io/U3forever>**。
+**<https://featherblade91.github.io/foreverU3>**。
 淡蓝 × 淡粉 × 泡泡的梦幻风格，无需任何后端。
 
 ## 功能
 
 - 🏠 **首页**：恋爱计时器（从 2025-08-26 开始）、纪念日倒计时、悄悄话弹窗（打字机 + 花瓣动画）
-- 🎡 **3D 旋转相册**：照片围成立体圆环，可拖拽旋转、惯性滑动
-- 🎞 **浪漫幻灯片**：全屏自动播放，淡入淡出 + Ken Burns 缩放
-- 💗 **爱心照片墙**：照片沿心形曲线排布，随心跳浮动
-- 📖 **恋爱时间轴**：按日期排列，滚动逐段浮现，纪念日自动高亮
-- 🫧 **泡泡漂流**：照片住在泡泡里满屏漂浮，戳开放大
+- 🎡 **3D 旋转相册**：照片围成立体圆环（每批 14 张，可「换一批」），可拖拽旋转、上下调视角、带倒影
+- 🌌 **星河漫游**：照片散落在 3D 隧道里，相机自动穿梭，拖拽环顾、滚轮加速
+- 🎞 **全屏幻灯片**：无边框全屏自动播放，淡入淡出 + Ken Burns 缩放，显示照片名称，支持触屏滑动
 - 🎵 **背景音乐**：WebAudio 合成的八音盒旋律，无需音频文件
 - ⚙ **管理端**（`admin.html`）：
   - **本地导入**：把照片直接写进本地项目文件夹，JPG 自动读取 EXIF 拍摄日期
   - **在线上传**：输入 GitHub Token，浏览器里直接把新照片提交到仓库
+
+> 📖 时间轴页面暂时下线（照片时间尚未标注），代码保留在 `js/main.js` 的
+> `buildTimeline()` 与 `css/style.css` 的「时间轴」段，标注好日期后加回导航和
+> `#page-timeline` 区块即可恢复。
 
 ## 本地预览 + 登记照片
 
@@ -35,25 +37,27 @@ python -m http.server 8000
 
 > 必须走 http:// 访问；直接双击 index.html 时浏览器会拦截 photos.json 的读取。
 > 如果不用浏览器管理，也可以跑 `python tools/sync_photos.py` 一键同步清单（只读 EXIF 日期，不写文案）。
+>
+> 新增照片后记得跑 `python tools/make_thumbs.py` 生成 `thumbs/` 小图（长边 640px），
+> 3D 相册和星河漫游用它加载，点开大图才读 `photos/` 原图；不跑也能看（会自动回退原图），只是慢。
 
-## 部署到 featherblade91.github.io/U3forever
+## 部署到 featherblade91.github.io/foreverU3
 
-主站是 Hexo 博客（源码在 `C:\文件\CODING\Web\hexo`），用 `hexo deploy` 强制推送，
-所以本相册放在 Hexo 的 `source/U3forever/` 下随主站一起部署（直接往仓库里推会被下次部署清掉）：
+项目里的 `.deploy/` 是主站仓库 `featherblade91.github.io` 的本地克隆，
+相册部署在其中的 `foreverU3/` 子目录：
 
 1. 把本项目文件（`index.html`、`admin.html`、`css/`、`js/`、`photos/`、`photos.json`）
-   复制到 `C:\文件\CODING\Web\hexo\source\U3forever\`（不要带 `README.md`，会被 Hexo 当文章渲染）。
-2. Hexo 根配置 `_config.yml` 的 `skip_render` 里加上 `"U3forever/**"`，避免 HTML 被当页面处理。
-3. 在 Hexo 目录运行 `hexo deploy`。
+   复制到 `.deploy/foreverU3/`。
+2. 在 `.deploy/` 里 `git add -A && git commit && git push`。
 
-等 1~2 分钟，访问 <https://featherblade91.github.io/U3forever>。
+等 1~2 分钟，访问 <https://featherblade91.github.io/foreverU3>。
 （文件都在子目录里，不会影响主站首页。）
 
 ## 在线上传照片（管理端 GitHub 模式）
 
-1. 打开 <https://featherblade91.github.io/U3forever/admin.html>。
+1. 打开 <https://featherblade91.github.io/foreverU3/admin.html>。
 2. 在「连接仓库」卡片填入 Token（仓库/分支/子目录已在 `js/config.js` 里预填为
-   `featherblade91.github.io` / `master` / `U3forever`）。
+   `featherblade91.github.io` / `master` / `foreverU3`）。
 3. 点「连接并读取相册」，之后选照片、填日期文案、「提交到 GitHub 💌」即可。
    GitHub Pages 约 1~2 分钟后更新线上相册。
 

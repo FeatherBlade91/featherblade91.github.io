@@ -13,6 +13,17 @@ const el = (tag, cls) => {
   return d;
 };
 const rand = (min, max) => min + Math.random() * (max - min);
+// 照片名称：优先标题，否则用文件名（去掉扩展名）
+const photoName = (p) =>
+  (p.caption || "").trim() ||
+  decodeURIComponent(p.src.split("/").pop() || "").replace(/\.[^.]+$/, "");
+// 列表场景用 thumbs/ 小图（由 tools/make_thumbs.py 生成），加载失败回退原图
+const thumbSrc = (p) => p.src.replace(/^photos\//, "thumbs/");
+function setThumb(img, p) {
+  img.decoding = "async";
+  img.onerror = () => { img.onerror = null; img.src = p.src; };
+  img.src = thumbSrc(p);
+}
 
 /* ---------- 数据加载 ---------- */
 async function loadPhotos() {
@@ -67,16 +78,19 @@ function initStarlight() {
   resize();
   addEventListener("resize", resize);
   (function tick() {
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    for (const st of stars) {
-      st.p += st.s;
-      const a = 0.25 + Math.abs(Math.sin(st.p)) * 0.55;
-      ctx.beginPath();
-      ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${st.c},${a})`;
-      ctx.shadowColor = `rgba(${st.c},0.9)`;
-      ctx.shadowBlur = 8;
-      ctx.fill();
+    // 画布被隐藏（如全屏模式下 display:none）时跳过绘制
+    if (cv.offsetParent !== null) {
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      for (const st of stars) {
+        st.p += st.s;
+        const a = 0.25 + Math.abs(Math.sin(st.p)) * 0.55;
+        ctx.beginPath();
+        ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${st.c},${a})`;
+        ctx.shadowColor = `rgba(${st.c},0.9)`;
+        ctx.shadowBlur = 8;
+        ctx.fill();
+      }
     }
     requestAnimationFrame(tick);
   })();
@@ -86,10 +100,15 @@ function initStarlight() {
 function switchMode(mode) {
   document.querySelectorAll(".mode-page").forEach((p) => p.classList.remove("active"));
   const page = $("#page-" + mode);
-  if (page) page.classList.add("active");
+  if (!page) return;
+  page.classList.add("active");
+  document.body.dataset.mode = mode;
   document.querySelectorAll(".nav-pill").forEach((n) => n.classList.toggle("active", n.dataset.mode === mode));
   if (mode === "slideshow") Slideshow.enter();
   else Slideshow.leave();
+  if (mode === "galaxy") Galaxy.enter();
+  else Galaxy.leave();
+  history.replaceState(null, "", "#" + mode);
   window.scrollTo({ top: 0 });
 }
 
@@ -102,94 +121,123 @@ function initNav() {
   );
 }
 
-/* ---------- 首页：计时器 + 纪念日 ---------- */
+/* ---------- 首页：恋爱计时器 ----------
+ * 两种显示方式：按总天数 / 按几年几月几周几天，可切换并记忆选择。
+ * 时间一律按北京时间（UTC+8）计算，不受本机时区影响。 */
 function initHome() {
   $("#heroSubtitle").textContent = SITE_CONFIG.subtitle || "";
-  const start = new Date(SITE_CONFIG.anniversaryDate + "T00:00:00");
-  const cells = {
-    days: $('[data-unit="days"]'),
-    hours: $('[data-unit="hours"]'),
-    minutes: $('[data-unit="minutes"]'),
-    seconds: $('[data-unit="seconds"]'),
-  };
-  function tick() {
-    let diff = Math.max(0, Date.now() - start.getTime());
-    const d = Math.floor(diff / 86400000);
-    const h = Math.floor((diff % 86400000) / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
-    cells.days.textContent = d;
-    cells.hours.textContent = String(h).padStart(2, "0");
-    cells.minutes.textContent = String(m).padStart(2, "0");
-    cells.seconds.textContent = String(s).padStart(2, "0");
+  const [sy, sm, sd] = SITE_CONFIG.anniversaryDate.split("-").map(Number);
+  // 把“现在”平移到北京时区：之后只用 UTC 方法读，就是北京时间的年月日时分秒
+  const beijingNow = () => new Date(Date.now() + 8 * 3600000);
+  const startUtc = Date.UTC(sy, sm - 1, sd); // 在一起当天 北京时间 00:00（在平移坐标系里）
+
+  const grid = $("#loveTimer");
+  const switchBtn = $("#timerSwitch");
+  let mode = localStorage.getItem("timerMode") || "days"; // days | calendar
+  let numEls = [];
+
+  // 日历差值：几年 + 几个月 + 几周 + 几天（都在平移后的北京坐标系里算）
+  function calendarParts(nowB) {
+    let y = nowB.getUTCFullYear() - sy;
+    let m = nowB.getUTCMonth() - (sm - 1);
+    let d = nowB.getUTCDate() - sd;
+    if (d < 0) {
+      m--;
+      const prevMonth = new Date(Date.UTC(nowB.getUTCFullYear(), nowB.getUTCMonth(), 0));
+      d += prevMonth.getUTCDate();
+    }
+    if (m < 0) { y--; m += 12; }
+    const w = Math.floor(d / 7);
+    return { y, m, w, d: d % 7 };
   }
+
+  function buildCells() {
+    const units = mode === "days"
+      ? ["天", "时", "分", "秒"]
+      : ["年", "个月", "周", "天", "时", "分", "秒"];
+    grid.classList.toggle("compact", units.length > 4);
+    grid.innerHTML = "";
+    numEls = units.map((u) => {
+      const cell = el("div", "timer-cell");
+      const num = el("span", "timer-num");
+      const unit = el("span", "timer-unit");
+      unit.textContent = u;
+      cell.appendChild(num);
+      cell.appendChild(unit);
+      grid.appendChild(cell);
+      return num;
+    });
+    switchBtn.textContent = mode === "days" ? "🗓 换成 几年几月几周几天" : "🗓 换成 总天数";
+  }
+
+  function tick() {
+    const nowB = beijingNow();
+    let diff = Math.max(0, nowB.getTime() - startUtc);
+    const h = Math.floor((diff % 86400000) / 3600000);
+    const mi = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    let vals;
+    if (mode === "days") {
+      vals = [Math.floor(diff / 86400000), h, mi, s];
+    } else {
+      const c = calendarParts(nowB);
+      vals = [c.y, c.m, c.w, c.d, h, mi, s];
+    }
+    vals.forEach((v, i) => {
+      numEls[i].textContent = mode === "days" && i > 0 ? String(v).padStart(2, "0") : v;
+    });
+  }
+
+  switchBtn.addEventListener("click", () => {
+    mode = mode === "days" ? "calendar" : "days";
+    localStorage.setItem("timerMode", mode);
+    buildCells();
+    tick();
+  });
+  buildCells();
   tick();
   setInterval(tick, 1000);
-
-  // 最近纪念日倒计时
-  const tip = $("#milestoneTip");
-  const now = new Date();
-  let best = null;
-  for (const ms of SITE_CONFIG.milestones || []) {
-    const [mm, dd] = ms.date.split("-").map(Number);
-    let next = new Date(now.getFullYear(), mm - 1, dd);
-    if (next < new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
-      next = new Date(now.getFullYear() + 1, mm - 1, dd);
-    }
-    const days = Math.round((next - now) / 86400000);
-    if (!best || days < best.days) best = { days, title: ms.title };
-  }
-  if (best) {
-    tip.textContent = best.days === 0
-      ? `🎉 今天就是「${best.title}」！`
-      : `距离「${best.title}」还有 ${best.days} 天 💕`;
-  }
 }
 
-/* ---------- 3D 旋转相册 ---------- */
+/* ---------- 3D 旋转相册 ----------
+ * 注意：translateZ 的半径必须小于 stage 的 perspective，
+ * 否则卡片会跑到“相机后面”被裁掉（之前啥也看不到就是这个原因）。
+ * 照片很多时一批一批地上环，保证半径始终合理。 */
 const Ring = {
   angle: 0,
   velocity: 0.12,
+  tilt: -6,
   dragging: false,
+  batch: 0,
+  PER_RING: 14,
   init() {
-    const ring = $("#ring");
+    this.ring = $("#ring");
     const stage = $("#ringStage");
-    const n = Math.max(PHOTOS.length, 1);
-    const radius = Math.max(300, n * 52);
-    PHOTOS.forEach((p, i) => {
-      const card = el("div", "ring-card");
-      card.style.transform = `rotateY(${(360 / n) * i}deg) translateZ(${radius}px)`;
-      const img = el("img");
-      img.src = p.src;
-      img.alt = p.caption || "";
-      img.loading = "lazy";
-      card.appendChild(img);
-      const capText = `${p.date || ""} ${p.caption || ""}`.trim();
-      if (capText) {
-        const cap = el("div", "ring-caption");
-        cap.textContent = capText;
-        card.appendChild(cap);
-      }
-      card.addEventListener("click", () => {
-        if (!this.moved) Lightbox.open(i);
-      });
-      ring.appendChild(card);
+    this.build();
+    $("#ringShuffle").addEventListener("click", () => {
+      this.batch++;
+      this.build();
     });
+    addEventListener("resize", () => this.build());
 
-    let lastX = 0;
+    let lastX = 0, lastY = 0;
     stage.addEventListener("pointerdown", (e) => {
       this.dragging = true;
       this.moved = false;
       lastX = e.clientX;
+      lastY = e.clientY;
       stage.setPointerCapture(e.pointerId);
     });
     stage.addEventListener("pointermove", (e) => {
       if (!this.dragging) return;
       const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
       lastX = e.clientX;
-      if (Math.abs(dx) > 2) this.moved = true;
+      lastY = e.clientY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
       this.velocity = dx * 0.15;
       this.angle += dx * 0.25;
+      this.tilt = Math.max(-24, Math.min(14, this.tilt - dy * 0.08));
     });
     const end = () => { this.dragging = false; };
     stage.addEventListener("pointerup", end);
@@ -197,15 +245,157 @@ const Ring = {
 
     const loop = () => {
       if (!this.dragging) {
-        // 惯性衰减 + 默认缓慢自转
+        // 惯性衰减 + 默认缓慢自转，视角缓慢回正
         this.velocity += (0.12 - this.velocity) * 0.02;
         this.angle += this.velocity;
+        this.tilt += (-6 - this.tilt) * 0.02;
       }
-      ring.style.transform = `rotateY(${this.angle}deg)`;
+      this.ring.style.transform = `rotateX(${this.tilt}deg) rotateY(${this.angle}deg)`;
       requestAnimationFrame(loop);
     };
     loop();
   },
+  build() {
+    if (!PHOTOS.length) return;
+    const n = Math.min(this.PER_RING, PHOTOS.length);
+    const totalBatches = Math.ceil(PHOTOS.length / n);
+    this.batch = ((this.batch % totalBatches) + totalBatches) % totalBatches;
+    const cardW = this.ring.clientWidth || 260;
+    const radius = Math.round((cardW / 2 + 20) / Math.tan(Math.PI / n));
+    this.ring.innerHTML = "";
+    for (let k = 0; k < n; k++) {
+      const gi = (this.batch * n + k) % PHOTOS.length;
+      const p = PHOTOS[gi];
+      const card = el("div", "ring-card");
+      card.style.transform = `rotateY(${(360 / n) * k}deg) translateZ(${radius}px)`;
+      const img = el("img");
+      img.alt = photoName(p);
+      img.loading = "lazy";
+      setThumb(img, p);
+      card.appendChild(img);
+      const cap = el("div", "ring-caption");
+      cap.textContent = photoName(p);
+      card.appendChild(cap);
+      card.addEventListener("click", () => {
+        if (!this.moved) Lightbox.open(gi);
+      });
+      this.ring.appendChild(card);
+    }
+  },
+};
+
+/* ---------- 星河漫游 ----------
+ * 照片散落在一条 3D 隧道里，相机匀速向前穿梭；
+ * 飞过身后的照片被回收送到隧道尽头，形成无尽星海。 */
+const Galaxy = {
+  DEPTH: 7000,         // 隧道总长（px）
+  VISIBLE_DEPTH: 5200, // 超过这个深度的照片隐藏且不加载，控制内存和流量
+  cam: 0,
+  speed: 2.4,
+  speedBoost: 0,
+  lookX: 0,
+  lookY: 0,
+  items: [], // { el, img, src, x, y, z, i, visible, loaded }
+  running: false,
+  init() {
+    this.stage = $("#galaxyStage");
+    this.space = $("#galaxySpace");
+    PHOTOS.forEach((p, i) => {
+      const d = el("div", "galaxy-photo");
+      d.style.visibility = "hidden";
+      const img = el("img");
+      img.alt = photoName(p);
+      img.decoding = "async";
+      d.appendChild(img);
+      d.addEventListener("click", () => {
+        if (!this.moved) Lightbox.open(i);
+      });
+      this.space.appendChild(d);
+      const it = {
+        el: d,
+        img,
+        src: thumbSrc(p),
+        full: p.src,
+        x: rand(-46, 46),          // vw
+        y: rand(-38, 38),          // vh
+        z: rand(400, this.DEPTH),  // 距离相机的深度
+        i,
+        visible: false,
+        loaded: false,
+      };
+      this.place(it);
+      this.items.push(it);
+    });
+
+    // 拖拽环顾四周
+    let lastX = 0, lastY = 0, dragging = false;
+    this.stage.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      this.moved = false;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      this.stage.setPointerCapture(e.pointerId);
+    });
+    this.stage.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
+      this.lookX = Math.max(-32, Math.min(32, this.lookX + dx * 0.06));
+      this.lookY = Math.max(-24, Math.min(24, this.lookY - dy * 0.06));
+    });
+    const end = () => { dragging = false; };
+    this.stage.addEventListener("pointerup", end);
+    this.stage.addEventListener("pointercancel", end);
+    // 滚轮加速 / 减速穿梭
+    this.stage.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      this.speedBoost = Math.max(-2, Math.min(14, this.speedBoost - e.deltaY * 0.01));
+    }, { passive: false });
+
+    const loop = () => {
+      if (this.running) {
+        this.speedBoost *= 0.97; // 加速效果衰减
+        this.cam += Math.max(0.4, this.speed + this.speedBoost);
+        this.lookX *= 0.995;
+        this.lookY *= 0.995;
+        this.space.style.transform =
+          `rotateY(${this.lookX}deg) rotateX(${this.lookY}deg) translateZ(${this.cam}px)`;
+        for (const it of this.items) {
+          const rel = it.z - this.cam;
+          if (rel < -300) {
+            // 飞到相机身后：回收送到隧道尽头
+            it.z += this.DEPTH;
+            this.place(it);
+            it.visible = false;
+            it.el.style.visibility = "hidden";
+            continue;
+          }
+          const vis = rel < this.VISIBLE_DEPTH;
+          if (vis !== it.visible) {
+            it.visible = vis;
+            it.el.style.visibility = vis ? "" : "hidden";
+            // 进入可视深度才开始加载，避免一次性拉全部原图
+            if (vis && !it.loaded) {
+              it.loaded = true;
+              it.img.onerror = () => { it.img.onerror = null; it.img.src = it.full; };
+              it.img.src = it.src;
+            }
+          }
+        }
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  },
+  place(it) {
+    it.el.style.transform =
+      `translate(-50%, -50%) translate3d(${it.x}vw, ${it.y}vh, ${-it.z}px)`;
+  },
+  enter() { this.running = true; },
+  leave() { this.running = false; },
 };
 
 /* ---------- 幻灯片 ---------- */
@@ -219,17 +409,32 @@ const Slideshow = {
     this.b = $("#slideB");
     this.front = this.a;
     const dots = $("#slideDots");
-    PHOTOS.forEach((_, i) => {
-      const d = el("span", "slide-dot");
-      d.addEventListener("click", () => this.go(i));
-      dots.appendChild(d);
-    });
+    // 照片太多时点指示器会溢出，直接隐藏
+    if (PHOTOS.length <= 40) {
+      PHOTOS.forEach((_, i) => {
+        const d = el("span", "slide-dot");
+        d.addEventListener("click", () => this.go(i));
+        dots.appendChild(d);
+      });
+    } else {
+      dots.style.display = "none";
+    }
     $("#slidePrev").addEventListener("click", () => this.go(this.idx - 1));
     $("#slideNext").addEventListener("click", () => this.go(this.idx + 1));
     $("#slidePlay").addEventListener("click", () => {
       this.playing = !this.playing;
       $("#slidePlay").textContent = this.playing ? "⏸" : "▶";
       if (this.playing) this.auto();
+    });
+    // 触屏左右滑动切换
+    let touchX = null;
+    const box = $("#slideBox");
+    box.addEventListener("pointerdown", (e) => { touchX = e.clientX; });
+    box.addEventListener("pointerup", (e) => {
+      if (touchX === null) return;
+      const dx = e.clientX - touchX;
+      touchX = null;
+      if (Math.abs(dx) > 48) this.go(this.idx + (dx < 0 ? 1 : -1));
     });
   },
   enter() {
@@ -252,9 +457,9 @@ const Slideshow = {
     back.classList.add("show");
     this.front.classList.remove("show");
     this.front = back;
-    const capText = `${p.date || ""} ${p.caption || ""}`.trim();
-    $("#slideCaption").textContent = capText;
-    $("#slideCaption").style.display = capText ? "" : "none";
+    const name = photoName(p);
+    $("#slideCaption").textContent = name;
+    $("#slideCaption").style.display = name ? "" : "none";
     document.querySelectorAll(".slide-dot").forEach((d, j) => d.classList.toggle("active", j === this.idx));
     if (this.playing) this.auto();
   },
@@ -264,34 +469,7 @@ const Slideshow = {
   },
 };
 
-/* ---------- 爱心照片墙 ---------- */
-function buildHeartWall() {
-  const wall = $("#heartWall");
-  const n = PHOTOS.length;
-  if (!n) return;
-  // 心形参数方程
-  const heart = (t) => ({
-    x: 16 * Math.pow(Math.sin(t), 3),
-    y: 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t),
-  });
-  PHOTOS.forEach((p, i) => {
-    const t = (Math.PI * 2 * i) / n;
-    const pt = heart(t);
-    const d = el("div", "heart-photo");
-    d.style.left = 50 + (pt.x / 17) * 46 + "%";
-    d.style.top = 50 - (pt.y / 17) * 44 + "%";
-    d.style.animationDelay = rand(-5, 0) + "s";
-    const img = el("img");
-    img.src = p.src;
-    img.alt = p.caption || "";
-    img.loading = "lazy";
-    d.appendChild(img);
-    d.addEventListener("click", () => Lightbox.open(i));
-    wall.appendChild(d);
-  });
-}
-
-/* ---------- 时间轴 ---------- */
+/* ---------- 时间轴（暂时下线：照片时间尚未标注，代码保留以便恢复） ---------- */
 function buildTimeline() {
   const tl = $("#timeline");
   if (!PHOTOS.length) {
@@ -340,37 +518,6 @@ function buildTimeline() {
   document.querySelectorAll(".tl-item").forEach((d) => io.observe(d));
 }
 
-/* ---------- 泡泡漂流 ---------- */
-function buildDrift() {
-  const field = $("#driftField");
-  const n = PHOTOS.length;
-  if (!n) return;
-  PHOTOS.forEach((p, i) => {
-    const b = el("button", "drift-bubble");
-    const size = rand(96, 170);
-    b.style.width = b.style.height = size + "px";
-    b.style.left = rand(3, 88) + "%";
-    b.style.top = rand(4, 80) + "%";
-    b.style.setProperty("--fdur", rand(6, 12) + "s");
-    b.style.setProperty("--fdelay", rand(-10, 0) + "s");
-    b.style.setProperty("--fx", rand(-26, 26) + "px");
-    b.style.setProperty("--fy", rand(-26, 26) + "px");
-    const img = el("img");
-    img.src = p.src;
-    img.alt = p.caption || "";
-    img.loading = "lazy";
-    b.appendChild(img);
-    b.addEventListener("click", () => {
-      b.classList.add("drift-pop");
-      setTimeout(() => {
-        Lightbox.open(i);
-        setTimeout(() => b.classList.remove("drift-pop"), 400);
-      }, 380);
-    });
-    field.appendChild(b);
-  });
-}
-
 /* ---------- 灯箱 ---------- */
 const Lightbox = {
   idx: 0,
@@ -398,7 +545,8 @@ const Lightbox = {
   render() {
     const p = PHOTOS[this.idx];
     $("#lbImg").src = p.src;
-    $("#lbCaption").textContent = `${p.date || ""} ${p.caption || ""}`.trim();
+    $("#lbImg").alt = photoName(p);
+    $("#lbCaption").textContent = photoName(p);
   },
 };
 
@@ -475,7 +623,8 @@ function initMusic() {
   Lightbox.init();
   Slideshow.init();
   Ring.init();
-  buildHeartWall();
-  buildTimeline();
-  buildDrift();
+  Galaxy.init();
+  // buildTimeline(); // 时间轴暂时下线：照片时间尚未标注
+  // 支持 #ring / #galaxy / #slideshow 直达
+  if (location.hash) switchMode(location.hash.slice(1));
 })();
