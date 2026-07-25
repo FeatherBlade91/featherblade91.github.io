@@ -369,12 +369,15 @@ body[data-mode="slideshow"] .bg-glow { display: none; }
 }
 .slide-layer {
   position: absolute; inset: 0; background-size: cover; background-position: center;
-  opacity: 0; transition: opacity 1.4s ease;
+  opacity: 0; transition: opacity 2.2s ease-in-out;
+  z-index: 1;
+  /* 两层常驻轻微呼吸缩放，切换只动透明度（纯淡化），撤类时不会跳变 */
+  animation: kenBurns 14s ease-in-out infinite alternate;
 }
-.slide-layer.show { opacity: 1; animation: kenBurns 7s ease-out forwards; }
+.slide-layer.show { opacity: 1; z-index: 2; }
 @keyframes kenBurns {
-  from { transform: scale(1) translate(0, 0); }
-  to { transform: scale(1.12) translate(-1.5%, 1.5%); }
+  from { transform: scale(1.03); }
+  to { transform: scale(1.09); }
 }
 .slide-caption {
   position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%);
