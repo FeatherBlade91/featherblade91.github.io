@@ -108,6 +108,7 @@ function switchMode(mode) {
   else Slideshow.leave();
   if (mode === "galaxy") Galaxy.enter();
   else Galaxy.leave();
+  if (mode === "ring") Ring.enter();
   history.replaceState(null, "", "#" + mode);
   window.scrollTo({ top: 0 });
 }
@@ -200,16 +201,20 @@ function initHome() {
 }
 
 /* ---------- 3D 旋转相册（无限环） ----------
- * 卡片围成圆环，每张卡按真实宽高比确定自己的宽度（横图横放、竖图竖放），
+ * 每张卡片保持照片的真实宽高比：横图就是横的、竖图就是竖的，一律不裁剪。
+ * 尺寸按「等面积」给：宽 = u·√比例、高 = u/√比例，于是 3:2 的横图和 2:3 的竖图
+ * 分量相当却形状分明，一眼就能看出两种规格；u 由舞台尺寸决定（见 unit()）。
  * 间距不按等分角度，而是沿环按弧长逐个累加：每张卡占据「自身宽度 + GAP」，
  * 因此无论横竖、多宽，相邻卡片之间永远保持同样的 GAP，不会重叠。
  * 环总弧长 L = Σ(卡宽 + GAP)，半径 R = L / 2π；
  * 相机位置 cam（弧长坐标）连续推进，飞到后半环的卡片被回收到
  * 前进方向的最前端并换上新照片，因此拖动可以无限持续。
- * 注意：半径必须小于 stage 的 perspective，否则卡片会跑到“相机后面”被裁掉。 */
+ * 舞台的 perspective 不写死，而是按 R 反推（见 recompute），让最前排的卡片
+ * 稳定放大到 FRONT_ZOOM 倍——否则照片一多、环一大，前排就会糊到糊满屏幕。 */
 const Ring = {
   SLOTS: 30,        // 环上同时存在的卡片数
   GAP: 28,          // 相邻卡片的间距（px，沿环的弧长测量）
+  FRONT_ZOOM: 1.3,  // 最前排卡片相对实际尺寸的放大倍数
   DEFAULT_V: -2.4,  // 默认自转速度（px / 帧，负值 = 向前）
   cam: 0,           // 相机位置（沿环的弧长 px，单调可正可负）
   velocity: -2.4,
@@ -222,7 +227,8 @@ const Ring = {
   length: 1,        // 环的总弧长 L
   init() {
     this.ring = $("#ring");
-    const stage = $("#ringStage");
+    this.stage = $("#ringStage");
+    const stage = this.stage;
     this.build();
     addEventListener("resize", () => this.layout());
 
@@ -257,7 +263,10 @@ const Ring = {
         this.cam -= this.velocity;
         this.tilt += (-6 - this.tilt) * 0.02;
       }
-      this.ring.style.transform = `rotateX(${this.tilt}deg)`;
+      // 环一倾斜，最前排就会往下掉 R·sin(tilt)（前排还要再乘放大倍数），
+      // 这里按同样的量抬回来，让最前排始终停在画面中间偏上
+      const lift = Math.sin((this.tilt * Math.PI) / 180) * this.radius * this.FRONT_ZOOM * 0.85;
+      this.ring.style.transform = `translateY(${lift.toFixed(1)}px) rotateX(${this.tilt}deg)`;
       // 回收：队尾（order[0]）落到后半环就跳到最前端换照片，反向拖动时对称处理。
       // 回收会改变总弧长，可能让另一端越界，因此成对反复检查直到两端都收敛
       let moved = true, guard = 0;
@@ -282,14 +291,21 @@ const Ring = {
     };
     loop();
   },
+  // 卡片的基准尺寸 u：横竖两种规格都以它为“面积边长”，跟着舞台大小走。
+  // 前排放大 FRONT_ZOOM 倍后，竖图（最高的那种）大约占舞台高度的一半。
+  unit() {
+    const w = (this.stage && this.stage.clientWidth) || innerWidth;
+    const h = (this.stage && this.stage.clientHeight) || innerHeight;
+    // 窄屏放宽横向占比，不然手机上照片小得看不清
+    return Math.max(96, Math.min(0.34 * h, (w < 640 ? 0.46 : 0.34) * w, 300));
+  },
   build() {
     if (!PHOTOS.length) return;
     this.ring.innerHTML = "";
     this.slots = [];
     this.order = [];
     this.base = 0;
-    const baseW = this.ring.clientWidth || 170;
-    const baseH = this.ring.clientHeight || 230;
+    const u = this.unit();
     for (let i = 0; i < this.SLOTS; i++) {
       const card = el("div", "ring-card");
       const img = el("img");
@@ -297,8 +313,12 @@ const Ring = {
       const cap = el("div", "ring-caption");
       card.appendChild(img);
       card.appendChild(cap);
-      // 宽度先用基础尺寸占位，图片加载完成后 fitCard 按真实宽高比重算
-      const s = { el: card, img, cap, photoIdx: i % PHOTOS.length, w: baseW, h: baseH, s: 0 };
+      // 先按 3:4 占位，图片加载完成后 fitCard 按真实宽高比重算
+      const s = { el: card, img, cap, photoIdx: i % PHOTOS.length, w: u * 0.87, h: u * 1.15, s: 0 };
+      card.style.width = s.w.toFixed(1) + "px";
+      card.style.height = s.h.toFixed(1) + "px";
+      card.style.left = (-s.w / 2).toFixed(1) + "px";
+      card.style.top = (-s.h / 2).toFixed(1) + "px";
       card.addEventListener("click", () => {
         if (!this.moved && s.photoIdx >= 0) Lightbox.open(s.photoIdx);
       });
@@ -319,6 +339,12 @@ const Ring = {
     }
     this.length = Math.max(x - this.base, 1);
     this.radius = this.length / (2 * Math.PI);
+    // 由半径反推 perspective：最前排（z = +R）的放大倍数恒为 FRONT_ZOOM，
+    // 卡片再多、环再大也不会糊成满屏。P = R·Z/(Z-1)
+    if (this.stage) {
+      const p = (this.radius * this.FRONT_ZOOM) / (this.FRONT_ZOOM - 1);
+      this.stage.style.perspective = Math.round(p) + "px";
+    }
   },
   // dir = 1：队尾卡回收到最前端；dir = -1：队首卡回收到最后端
   recycle(dir) {
@@ -347,6 +373,8 @@ const Ring = {
     for (const s of this.slots) this.fitCard(s);
     this.recompute();
   },
+  // 页面藏着的时候 stage 量不到尺寸，进来时按真实舞台重排一次
+  enter() { this.layout(); },
   assign(s) {
     const p = PHOTOS[s.photoIdx];
     s.img.alt = photoName(p);
@@ -359,19 +387,484 @@ const Ring = {
     const nw = s.img.naturalWidth, nh = s.img.naturalHeight;
     if (!nw || !nh) return;
     const ar = nw / nh;
-    const baseW = this.ring.clientWidth || 170;
-    const baseH = this.ring.clientHeight || 230;
-    // 统一高度，宽度完全按真实宽高比：横图就是横的、竖图就是竖的；
-    // 不重叠由弧长布局的 GAP 保证，只给极端宽幅全景一个上限
-    const w = Math.min(baseH * ar, baseH * 2.5);
+    const u = this.unit();
+    // 等面积：宽 = u·√比例、高 = u/√比例。横图明显更宽、竖图明显更高，
+    // 但两者面积相当，转起来不会一会儿大一会儿小；极端宽幅全景另给上限。
+    const k = Math.sqrt(Math.min(Math.max(ar, 0.3), 3));
+    const w = Math.min(u * k, u * 1.8);
     const h = w / ar;
     s.w = w;
     s.h = h;
-    s.el.style.width = w + "px";
-    s.el.style.height = h + "px";
-    s.el.style.left = (baseW - w) / 2 + "px";
-    s.el.style.top = (baseH - h) / 2 + "px";
+    s.el.style.width = w.toFixed(1) + "px";
+    s.el.style.height = h.toFixed(1) + "px";
+    // .ring 是 0×0 的锚点，卡片以它为中心摆
+    s.el.style.left = (-w / 2).toFixed(1) + "px";
+    s.el.style.top = (-h / 2).toFixed(1) + "px";
     this.recompute();
+  },
+};
+
+/* ---------- 星河漫游的背景天体：土星 ----------
+ * 规格对齐 saturn.html：星幕球壳 + 程序化条纹贴图的扁球行星（赤道半径 20、
+ * 极扁率 0.89、转轴倾角 26.7°、自转 0.12）+ 分区粒子环（B 环 / 卡西尼缝 / A 环，
+ * 开普勒差速 ω ∝ r^-1.5，加法混合）+ 大气辉光，太阳光 / 环境光 / 边缘光三盏灯。
+ * saturn.html 用的是 three.js，这里按同一套参数用原生 WebGL 重写，保持整站零依赖；
+ * 粒子数按“背景层”的定位下调（环 6 万 → 4.6 万、星 8000 → 6000）。
+ * 只在首次进入星河漫游时初始化：页面隐藏时 clientWidth 为 0，提前建画布会得到 0×0。 */
+const SaturnSky = {
+  TILT: (26.7 * Math.PI) / 180, // 转轴倾角，行星与环共用
+  FLATTEN: 0.89,                // 扁率：土星两极明显压扁
+  RING_COUNT: 46000,
+  STAR_COUNT: 6000,
+  DIST: 215,                    // 相机到土星的距离
+  ready: false,
+
+  /* ===== 4×4 / 3×3 矩阵小工具（列主序，可直接喂给 WebGL） ===== */
+  // shiftX / shiftY：镜头平移，把土星推离画面正中（正中留给照片隧道）
+  perspective(fovy, aspect, near, far, shiftX, shiftY) {
+    const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+    return new Float32Array([
+      f / aspect, 0, 0, 0,
+      0, f, 0, 0,
+      -shiftX, -shiftY, (far + near) * nf, -1,
+      0, 0, 2 * far * near * nf, 0,
+    ]);
+  },
+  lookAt(eye, target) {
+    let zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
+    let l = Math.hypot(zx, zy, zz) || 1; zx /= l; zy /= l; zz /= l;
+    let xx = zz, xy = 0, xz = -zx;          // up = (0,1,0) 与 z 轴叉乘
+    l = Math.hypot(xx, xy, xz) || 1; xx /= l; xy /= l; xz /= l;
+    const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    return new Float32Array([
+      xx, yx, zx, 0,
+      xy, yy, zy, 0,
+      xz, yz, zz, 0,
+      -(xx * eye[0] + xy * eye[1] + xz * eye[2]),
+      -(yx * eye[0] + yy * eye[1] + yz * eye[2]),
+      -(zx * eye[0] + zy * eye[1] + zz * eye[2]), 1,
+    ]);
+  },
+  mul(a, b) {
+    const o = new Float32Array(16);
+    for (let c = 0; c < 4; c++)
+      for (let r = 0; r < 4; r++)
+        o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    return o;
+  },
+  rotY(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]); },
+  rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); },
+  scaleM(x, y, z) { return new Float32Array([x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]); },
+  mat3of(m) { return new Float32Array([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]); },
+
+  /* ===== 着色器 / 缓冲区的小封装 ===== */
+  makeProgram(vsrc, fsrc) {
+    const gl = this.gl;
+    const compile = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.warn("saturn shader:", gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
+    };
+    const v = compile(gl.VERTEX_SHADER, vsrc), f = compile(gl.FRAGMENT_SHADER, fsrc);
+    if (!v || !f) return null;
+    const p = gl.createProgram();
+    gl.attachShader(p, v);
+    gl.attachShader(p, f);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      console.warn("saturn link:", gl.getProgramInfoLog(p));
+      return null;
+    }
+    const o = { p, a: {}, u: {} };
+    for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_ATTRIBUTES); i < n; i++) {
+      const name = gl.getActiveAttrib(p, i).name;
+      o.a[name] = gl.getAttribLocation(p, name);
+    }
+    for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) {
+      const name = gl.getActiveUniform(p, i).name;
+      o.u[name] = gl.getUniformLocation(p, name);
+    }
+    return o;
+  },
+  buffer(data, target) {
+    const gl = this.gl;
+    const b = gl.createBuffer();
+    const t = target || gl.ARRAY_BUFFER;
+    gl.bindBuffer(t, b);
+    gl.bufferData(t, data, gl.STATIC_DRAW);
+    return b;
+  },
+  // 切换程序时先关掉所有顶点属性槽，再按 layout 打开需要的，避免残留的槽指向别的缓冲
+  use(prog, buf, layout, stride) {
+    const gl = this.gl;
+    gl.useProgram(prog.p);
+    for (let i = 0; i < this.maxAttribs; i++) gl.disableVertexAttribArray(i);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    for (const [name, size, offset] of layout) {
+      const loc = prog.a[name];
+      if (loc == null || loc < 0) continue;
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride * 4, offset * 4);
+    }
+  },
+
+  /* ===== 行星贴图：canvas 程序化生成（横向条纹 + 噪点） ===== */
+  buildTexture() {
+    const W = 1024, H = 512;
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+
+    const grad = ctx.createLinearGradient(0, 0, 0, H); // 两极 → 赤道
+    [[0, "#c8a86b"], [0.18, "#e2c07a"], [0.3, "#d4aa65"], [0.45, "#f0d08a"], [0.5, "#e8c870"],
+     [0.55, "#f0d08a"], [0.7, "#d4aa65"], [0.82, "#e2c07a"], [1, "#c8a86b"]]
+      .forEach(([at, c]) => grad.addColorStop(at, c));
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    const bands = [
+      { y: 0.12, w: 0.04, c: "rgba(160,110,50,0.35)" },
+      { y: 0.22, w: 0.025, c: "rgba(200,160,80,0.25)" },
+      { y: 0.32, w: 0.05, c: "rgba(140,90,40,0.40)" },
+      { y: 0.41, w: 0.03, c: "rgba(220,180,90,0.30)" },
+      { y: 0.50, w: 0.06, c: "rgba(130,85,35,0.45)" },
+      { y: 0.60, w: 0.03, c: "rgba(210,170,85,0.28)" },
+      { y: 0.68, w: 0.04, c: "rgba(150,100,45,0.38)" },
+      { y: 0.78, w: 0.03, c: "rgba(195,155,75,0.22)" },
+      { y: 0.88, w: 0.04, c: "rgba(160,110,50,0.30)" },
+    ];
+    for (const b of bands) {
+      const bg = ctx.createLinearGradient(0, (b.y - b.w / 2) * H, 0, (b.y + b.w / 2) * H);
+      bg.addColorStop(0, "transparent");
+      bg.addColorStop(0.5, b.c);
+      bg.addColorStop(1, "transparent");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, (b.y - b.w) * H, W, b.w * 2 * H);
+    }
+
+    const imgd = ctx.getImageData(0, 0, W, H);
+    const d = imgd.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const n = (Math.random() - 0.5) * 12;
+      d[i] = Math.min(255, Math.max(0, d[i] + n));
+      d[i + 1] = Math.min(255, Math.max(0, d[i + 1] + n * 0.9));
+      d[i + 2] = Math.min(255, Math.max(0, d[i + 2] + n * 0.6));
+    }
+    ctx.putImageData(imgd, 0, 0);
+    return cv;
+  },
+
+  /* ===== 几何体 ===== */
+  buildSphere(r, segW, segH) {
+    const v = [], idx = [];
+    for (let y = 0; y <= segH; y++) {
+      const phi = (y / segH) * Math.PI;
+      for (let x = 0; x <= segW; x++) {
+        const theta = (x / segW) * Math.PI * 2;
+        const nx = -Math.sin(phi) * Math.cos(theta);
+        const ny = Math.cos(phi);
+        const nz = Math.sin(phi) * Math.sin(theta);
+        v.push(nx * r, ny * r, nz * r, nx, ny, nz, x / segW, y / segH);
+      }
+    }
+    for (let y = 0; y < segH; y++) {
+      for (let x = 0; x < segW; x++) {
+        const a = y * (segW + 1) + x, b = a + segW + 1;
+        if (y !== 0) idx.push(a, b, a + 1);
+        if (y !== segH - 1) idx.push(b, b + 1, a + 1);
+      }
+    }
+    return { data: new Float32Array(v), index: new Uint16Array(idx) };
+  },
+  // 环：按密度分区抽样，同 saturn.html 的 B 环 / 卡西尼缝 / A 环结构
+  buildRings(count) {
+    const zones = [
+      { rMin: 24, rMax: 30, density: 0.20 },
+      { rMin: 30, rMax: 38, density: 1.00 },
+      { rMin: 38, rMax: 40, density: 0.10 }, // 卡西尼缝
+      { rMin: 40, rMax: 52, density: 0.85 },
+      { rMin: 52, rMax: 58, density: 0.40 },
+    ];
+    const total = zones.reduce((s, z) => s + z.density * (z.rMax - z.rMin), 0);
+    const REF_R = 37, REF_W = 0.018; // 开普勒归一化：ω ∝ r^(-3/2)
+    const d = new Float32Array(count * 6); // angle speed radius y size alpha
+    for (let i = 0; i < count; i++) {
+      let pick = Math.random() * total, zone = zones[0];
+      for (const z of zones) {
+        pick -= z.density * (z.rMax - z.rMin);
+        if (pick <= 0) { zone = z; break; }
+      }
+      const r = zone.rMin + Math.random() * (zone.rMax - zone.rMin);
+      const edgeFade = Math.min((r - zone.rMin) / 2, (zone.rMax - r) / 2);
+      const o = i * 6;
+      d[o] = Math.random() * Math.PI * 2;
+      d[o + 1] = REF_W * Math.pow(REF_R / r, 1.5);
+      d[o + 2] = r + (Math.random() - 0.5) * 0.4;          // 半径噪声
+      d[o + 3] = (Math.random() - 0.5) * 0.35;             // 环极薄，只有一点厚度
+      d[o + 4] = 0.6 + Math.random() * Math.random() * 2.2;
+      d[o + 5] = Math.min(1, zone.density * 0.85 * Math.min(1, edgeFade)) * (0.4 + Math.random() * 0.6);
+    }
+    return d;
+  },
+  buildStars(count) {
+    const d = new Float32Array(count * 4);
+    for (let i = 0; i < count; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const r = 800 + Math.random() * 400;
+      const o = i * 4;
+      d[o] = r * Math.sin(phi) * Math.cos(theta);
+      d[o + 1] = r * Math.sin(phi) * Math.sin(theta);
+      d[o + 2] = r * Math.cos(phi);
+      d[o + 3] = Math.random() * 1.8 + 0.4;
+    }
+    return d;
+  },
+
+  init(stage) {
+    const cv = el("canvas");
+    cv.id = "galaxyGL";
+    cv.setAttribute("aria-hidden", "true");
+    stage.insertBefore(cv, stage.firstChild);
+    const gl = cv.getContext("webgl", { alpha: true, antialias: false, depth: true });
+    if (!gl) { cv.remove(); return false; } // 不支持 WebGL：留 CSS 深空渐变兜底
+    this.gl = gl; this.cv = cv; this.stage = stage;
+    this.maxAttribs = gl.getParameter(gl.MAX_VERTEX_ATTRIBS);
+
+    const COMMON = `
+      uniform mat4 uProj;
+      uniform mat4 uView;
+      uniform mat4 uModel;`;
+
+    this.starProg = this.makeProgram(
+      `attribute vec3 aPos;
+       attribute float aSize;
+       uniform mat4 uProj;
+       uniform mat4 uView;
+       uniform float uScale;
+       void main() {
+         vec4 mv = uView * vec4(aPos, 1.0);
+         gl_PointSize = max(1.0, aSize * (uScale / -mv.z));
+         gl_Position = uProj * mv;
+       }`,
+      `precision mediump float;
+       void main() {
+         float d = length(gl_PointCoord - 0.5);
+         if (d > 0.5) discard;
+         float a = 1.0 - smoothstep(0.2, 0.5, d);
+         gl_FragColor = vec4(1.0, 1.0, 1.0, a * 0.85);
+       }`);
+
+    this.planetProg = this.makeProgram(
+      `attribute vec3 aPos;
+       attribute vec3 aNor;
+       attribute vec2 aUv;
+       ${COMMON}
+       uniform mat3 uNormalMat;
+       varying vec3 vNor;
+       varying vec3 vWorld;
+       varying vec2 vUv;
+       void main() {
+         vec4 world = uModel * vec4(aPos, 1.0);
+         vWorld = world.xyz;
+         vNor = uNormalMat * aNor;
+         vUv = aUv;
+         gl_Position = uProj * (uView * world);
+       }`,
+      `precision mediump float;
+       uniform sampler2D uTex;
+       uniform vec3 uEye;
+       uniform float uExposure;
+       varying vec3 vNor;
+       varying vec3 vWorld;
+       varying vec2 vUv;
+       void main() {
+         vec3 N = normalize(vNor);
+         vec3 base = texture2D(uTex, vUv).rgb;
+         vec3 L = normalize(vec3(300.0, 80.0, 200.0));   // 太阳 0xfff5e0 强度 2.2
+         float diff = max(dot(N, L), 0.0);
+         vec3 col = base * vec3(1.0, 0.961, 0.878) * diff * 2.2;
+         col += base * vec3(0.067, 0.133, 0.267) * 0.6;  // 环境光 0x112244
+         vec3 R = normalize(vec3(-200.0, -40.0, -100.0)); // 边缘光 0x4466aa 强度 0.4
+         col += base * vec3(0.267, 0.4, 0.667) * max(dot(N, R), 0.0) * 0.4;
+         vec3 H = normalize(L + normalize(uEye - vWorld)); // 高光 shininess 18
+         col += vec3(0.15, 0.12, 0.06) * pow(max(dot(N, H), 0.0), 18.0) * step(0.001, diff);
+         gl_FragColor = vec4(col * uExposure, 1.0);
+       }`);
+
+    this.ringProg = this.makeProgram(
+      `attribute float aAngle;
+       attribute float aSpeed;
+       attribute float aRadius;
+       attribute float aY;
+       attribute float aSize;
+       attribute float aAlpha;
+       ${COMMON}
+       uniform float uTime;
+       uniform float uScale;
+       varying float vAlpha;
+       void main() {
+         float angle = aAngle + aSpeed * uTime;   // 内圈快、外圈慢
+         vec4 mv = uView * (uModel * vec4(aRadius * cos(angle), aY, aRadius * sin(angle), 1.0));
+         gl_PointSize = max(1.0, aSize * (uScale / -mv.z));
+         gl_Position = uProj * mv;
+         vAlpha = aAlpha;
+       }`,
+      `precision mediump float;
+       uniform vec3 uColor;
+       varying float vAlpha;
+       void main() {
+         float d = length(gl_PointCoord - 0.5);
+         if (d > 0.5) discard;
+         float soft = 1.0 - smoothstep(0.15, 0.5, d);
+         gl_FragColor = vec4(uColor, soft * vAlpha);
+       }`);
+
+    this.haloProg = this.makeProgram(
+      `attribute vec2 aQuad;
+       uniform mat4 uProj;
+       uniform mat4 uView;
+       uniform vec2 uSize;
+       varying vec2 vQ;
+       void main() {
+         vec3 c = (uView * vec4(0.0, 0.0, 0.0, 1.0)).xyz; // 土星中心，正对镜头
+         vQ = aQuad;
+         gl_Position = uProj * vec4(c + vec3(aQuad * uSize, 0.0), 1.0);
+       }`,
+      `precision mediump float;
+       varying vec2 vQ;
+       void main() {
+         float d = length(vQ);
+         if (d > 1.0 || d < 0.469) discard;   // 内圈半径 60/128，贴着行星边缘起晕
+         float t = (d - 0.469) / 0.531;
+         vec3 c; float a;
+         if (t < 0.5) { c = mix(vec3(0.86,0.75,0.47), vec3(0.78,0.63,0.31), t / 0.5); a = mix(0.0, 0.08, t / 0.5); }
+         else if (t < 0.8) { c = mix(vec3(0.78,0.63,0.31), vec3(0.71,0.55,0.24), (t-0.5)/0.3); a = mix(0.08, 0.15, (t-0.5)/0.3); }
+         else { c = mix(vec3(0.71,0.55,0.24), vec3(0.63,0.47,0.20), (t-0.8)/0.2); a = mix(0.15, 0.0, (t-0.8)/0.2); }
+         gl_FragColor = vec4(c, a);
+       }`);
+
+    if (!this.starProg || !this.planetProg || !this.ringProg || !this.haloProg) {
+      cv.remove(); this.gl = null; return false;
+    }
+
+    const sphere = this.buildSphere(20, 64, 48);
+    this.sphereBuf = this.buffer(sphere.data);
+    this.sphereIdx = this.buffer(sphere.index, gl.ELEMENT_ARRAY_BUFFER);
+    this.sphereCount = sphere.index.length;
+    this.ringBuf = this.buffer(this.buildRings(this.RING_COUNT));
+    this.starBuf = this.buffer(this.buildStars(this.STAR_COUNT));
+    this.haloBuf = this.buffer(new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
+
+    this.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.buildTexture());
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    gl.clearColor(0, 0, 0, 0);
+    this.resize();
+    addEventListener("resize", () => this.resize());
+    this.ready = true;
+    return true;
+  },
+
+  resize() {
+    if (!this.gl) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const w = this.stage.clientWidth || window.innerWidth;
+    const h = this.stage.clientHeight || window.innerHeight;
+    this.cv.width = Math.max(1, Math.round(w * dpr));
+    this.cv.height = Math.max(1, Math.round(h * dpr));
+  },
+
+  /* 每帧渲染。lookX / lookY 是拖拽视角（度），叠加在缓慢自转的公转机位上 */
+  render(t, lookX, lookY) {
+    const gl = this.gl;
+    if (!gl || !this.ready) return;
+    const W = this.cv.width, H = this.cv.height;
+    gl.viewport(0, 0, W, H);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // 机位：绕土星缓慢转圈（对应 OrbitControls 的 autoRotate），拖拽时叠加偏移
+    const az = t * 0.018 + lookX * 0.012; // 约 350 秒转一圈，跟 saturn.html 的 autoRotate 同量级
+    const elev = Math.max(0.06, Math.min(0.9, 0.36 + lookY * 0.008));
+    const aspect = W / H;
+    const wide = aspect > 1.1;
+    const d = this.DIST * (wide ? 1 : 1.5); // 竖屏视野窄，退远一点免得土星占满整块屏
+    const eye = [
+      Math.sin(az) * Math.cos(elev) * d,
+      Math.sin(elev) * d,
+      Math.cos(az) * Math.cos(elev) * d,
+    ];
+    const proj = this.perspective(Math.PI / 4, aspect, 1, 4000, wide ? -0.38 : -0.1, wide ? 0.2 : 0.36);
+    const view = this.lookAt(eye, [0, 0, 0]);
+    const pxScale = H / 900; // 点的大小跟分辨率走，换屏幕不会忽大忽小
+
+    // 行星：倾角 → 自转 → 压扁；法线要用逆转置，压扁的方向反过来除
+    const spin = this.rotY(t * 0.12);
+    const tilt = this.rotZ(this.TILT);
+    const planetModel = this.mul(tilt, this.mul(spin, this.scaleM(1, this.FLATTEN, 1)));
+    const normalMat = this.mat3of(this.mul(tilt, this.mul(spin, this.scaleM(1, 1 / this.FLATTEN, 1))));
+
+    /* --- 星幕（先画，不写深度） --- */
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
+    this.use(this.starProg, this.starBuf, [["aPos", 3, 0], ["aSize", 1, 3]], 4);
+    gl.uniformMatrix4fv(this.starProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.starProg.u.uView, false, view);
+    gl.uniform1f(this.starProg.u.uScale, 300 * pxScale);
+    gl.drawArrays(gl.POINTS, 0, this.STAR_COUNT);
+
+    /* --- 行星本体（不透明，写深度，好让环从它背后穿过去） --- */
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    this.use(this.planetProg, this.sphereBuf, [["aPos", 3, 0], ["aNor", 3, 3], ["aUv", 2, 6]], 8);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.sphereIdx);
+    gl.uniformMatrix4fv(this.planetProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.planetProg.u.uView, false, view);
+    gl.uniformMatrix4fv(this.planetProg.u.uModel, false, planetModel);
+    gl.uniformMatrix3fv(this.planetProg.u.uNormalMat, false, normalMat);
+    gl.uniform3fv(this.planetProg.u.uEye, eye);
+    gl.uniform1f(this.planetProg.u.uExposure, 0.82); // 背景层，压一点曝光免得抢照片
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.uniform1i(this.planetProg.u.uTex, 0);
+    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_SHORT, 0);
+
+    /* --- 光环（加法混合，测深度但不写深度） --- */
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
+    this.use(this.ringProg, this.ringBuf, [
+      ["aAngle", 1, 0], ["aSpeed", 1, 1], ["aRadius", 1, 2],
+      ["aY", 1, 3], ["aSize", 1, 4], ["aAlpha", 1, 5],
+    ], 6);
+    gl.uniformMatrix4fv(this.ringProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.ringProg.u.uView, false, view);
+    gl.uniformMatrix4fv(this.ringProg.u.uModel, false, tilt);
+    gl.uniform1f(this.ringProg.u.uTime, t);
+    gl.uniform1f(this.ringProg.u.uScale, 380 * pxScale);
+    gl.uniform3f(this.ringProg.u.uColor, 0.88, 0.8, 0.62);
+    gl.drawArrays(gl.POINTS, 0, this.RING_COUNT);
+
+    /* --- 大气辉光 --- */
+    this.use(this.haloProg, this.haloBuf, [["aQuad", 2, 0]], 2);
+    gl.uniformMatrix4fv(this.haloProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.haloProg.u.uView, false, view);
+    gl.uniform2f(this.haloProg.u.uSize, 26, 23);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
   },
 };
 
@@ -379,13 +872,13 @@ const Ring = {
  * 照片散落在一条 3D 隧道里，相机匀速向前穿梭；
  * 隧道里同一时刻只保留少量照片槽位，飞过身后的槽位回收并
  * 换成未出场的照片，循环展示全集，控制内存与渲染开销。
- * 背景层：视野正中央一个 WebGL 粒子银河（参考 saturn.html 的粒子环，
- * 开普勒式差速旋转）+ canvas 星幕（深度视差 + 闪烁）+ 流星雨。 */
+ * 背景层：远处一颗 WebGL 土星（SaturnSky）+ canvas 星幕（深度视差 + 闪烁）+ 流星雨。 */
 const Galaxy = {
   DEPTH: 7000,         // 隧道总长（px）
-  VISIBLE_DEPTH: 5200, // 超过这个深度的照片隐藏且不加载，控制内存和流量
+  VISIBLE_DEPTH: 4600, // 超过这个深度的照片隐藏且不加载，控制内存和流量
   PERSPECTIVE: 900,    // 与 .galaxy-stage 的 perspective 保持一致
-  SLOTS: 36,           // 隧道里同时存在的照片数量
+  // 单次渲染的照片数：同屏越少越流畅（原来 36 张，掉帧明显），小屏再少一些
+  SLOTS: innerWidth < 768 ? 10 : 18,
   cam: 0,
   speed: 2.4,
   speedBoost: 0,
@@ -436,9 +929,8 @@ const Galaxy = {
     }
     this.nextPhoto = slotCount;
 
-    // 背景层：银河旋涡 + 星幕
+    // 背景星幕（土星那层等首次进入时再建，见 enter）
     this.initStarfield();
-    this.initWebGalaxy();
 
     // 拖拽环顾四周（不用 setPointerCapture，否则会抢走照片上的 click）
     let lastX = 0, lastY = 0, dragging = false;
@@ -493,12 +985,14 @@ const Galaxy = {
             this.place(it);
             it.visible = false;
             it.el.style.visibility = "hidden";
+            it.el.style.opacity = "0";
             continue;
           }
           const vis = rel < this.VISIBLE_DEPTH;
           if (vis !== it.visible) {
             it.visible = vis;
             it.el.style.visibility = vis ? "" : "hidden";
+            it.el.style.opacity = vis ? "1" : "0"; // 远处淡入，不硬闪出来
             // 进入可视深度才开始加载，避免一次性拉全部原图
             if (vis && !it.loaded) {
               it.loaded = true;
@@ -508,7 +1002,7 @@ const Galaxy = {
           }
         }
         this.drawStars();
-        this.renderWebGalaxy();
+        SaturnSky.render(performance.now() / 1000, this.lookX, this.lookY);
         this.maybeShoot();
       }
       requestAnimationFrame(loop);
@@ -530,24 +1024,31 @@ const Galaxy = {
     this.stage.insertBefore(cv, this.space);
     this.starCv = cv;
     this.starCtx = cv.getContext("2d");
+    this.stars = [];
+    addEventListener("resize", () => this.resizeStars());
+  },
+  /* 画布尺寸只能在星河漫游显示出来之后量：页面藏着时 clientWidth 是 0，
+   * 那样建出来的画布是 0×0，背景会整个消失。所以每次进入都重新量一次。 */
+  resizeStars() {
+    const cv = this.starCv;
+    if (!cv) return;
+    const w = this.stage.clientWidth || innerWidth;
+    const h = this.stage.clientHeight || innerHeight;
+    if (cv.width === w && cv.height === h && this.stars.length) return;
+    cv.width = w;
+    cv.height = h;
     const STAR_COLORS = ["#ffffff", "#ffffff", "#ffffff", "#aedcff", "#ffc6de", "#d9ccff"];
-    const resize = () => {
-      cv.width = this.stage.clientWidth;
-      cv.height = this.stage.clientHeight;
-      const N = cv.width < 768 ? 190 : 460;
-      this.stars = Array.from({ length: N }, () => ({
-        dx: rand(-1, 1) * cv.width * 0.85,  // 单位深度处的方向偏移（px）
-        dy: rand(-1, 1) * cv.height * 0.85,
-        z: rand(80, this.DEPTH),
-        r: rand(0.5, 1.7),
-        tw: rand(0.6, 2.2),                 // 闪烁频率
-        ph: rand(0, Math.PI * 2),           // 闪烁相位
-        c: STAR_COLORS[(Math.random() * STAR_COLORS.length) | 0],
-        bright: Math.random() < 0.08,       // 少量亮星画星芒
-      }));
-    };
-    resize();
-    addEventListener("resize", resize);
+    const N = w < 768 ? 150 : 320;
+    this.stars = Array.from({ length: N }, () => ({
+      dx: rand(-1, 1) * w * 0.85,  // 单位深度处的方向偏移（px）
+      dy: rand(-1, 1) * h * 0.85,
+      z: rand(80, this.DEPTH),
+      r: rand(0.5, 1.7),
+      tw: rand(0.6, 2.2),          // 闪烁频率
+      ph: rand(0, Math.PI * 2),    // 闪烁相位
+      c: STAR_COLORS[(Math.random() * STAR_COLORS.length) | 0],
+      bright: Math.random() < 0.08, // 少量亮星画星芒
+    }));
   },
   drawStars() {
     const g = this.starCtx;
@@ -585,182 +1086,6 @@ const Galaxy = {
     g.globalAlpha = 1;
   },
 
-  /* ----- 背景：WebGL 粒子银河 -----
-   * 参考 saturn.html 的粒子环：数万颗粒子组成两条旋臂 + 银核，
-   * 开普勒式差速旋转（内快外慢），加法混合，固定在视野正中央。 */
-  initWebGalaxy() {
-    const cv = el("canvas");
-    cv.id = "galaxyGL";
-    cv.setAttribute("aria-hidden", "true");
-    this.stage.insertBefore(cv, this.stage.firstChild);
-    const gl = cv.getContext("webgl", { alpha: true, antialias: false, premultipliedAlpha: false });
-    if (!gl) { cv.remove(); return; }
-    this.gl = gl;
-    this.glCv = cv;
-
-    const VERT = `
-      attribute float aAngle;
-      attribute float aSpeed;
-      attribute float aRadius;
-      attribute float aY;
-      attribute float aSize;
-      attribute float aAlpha;
-      attribute vec3 aColor;
-      uniform float uTime;
-      uniform float uAspect;
-      uniform mat3 uTilt;
-      varying vec3 vColor;
-      varying float vAlpha;
-      void main() {
-        float ang = aAngle + aSpeed * uTime;
-        vec3 p = uTilt * vec3(aRadius * cos(ang), aY, aRadius * sin(ang));
-        p.z -= 3.0;   // 银河整体推到远处
-        float f = 1.9;
-        gl_Position = vec4(p.x * f / (uAspect * -p.z), p.y * f / -p.z, 0.5, 1.0);
-        gl_PointSize = aSize * (12.0 / -p.z);
-        vColor = aColor;
-        vAlpha = aAlpha;
-      }`;
-    const FRAG = `
-      precision mediump float;
-      varying vec3 vColor;
-      varying float vAlpha;
-      void main() {
-        float d = length(gl_PointCoord - 0.5);
-        if (d > 0.5) discard;
-        float soft = 1.0 - smoothstep(0.08, 0.5, d);
-        gl_FragColor = vec4(vColor, soft * vAlpha);
-      }`;
-    const sh = (type, src) => {
-      const s = gl.createShader(type);
-      gl.shaderSource(s, src);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        console.warn("galaxy shader:", gl.getShaderInfoLog(s));
-        return null;
-      }
-      return s;
-    };
-    const vs = sh(gl.VERTEX_SHADER, VERT);
-    const fs = sh(gl.FRAGMENT_SHADER, FRAG);
-    if (!vs || !fs) { cv.remove(); this.gl = null; return; }
-    const prog = gl.createProgram();
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    gl.useProgram(prog);
-
-    /* 生成粒子：两条旋臂 + 中央银核 */
-    const ARM_COUNT = 56000, BULGE_COUNT = 14000;
-    const COUNT = ARM_COUNT + BULGE_COUNT;
-    const data = new Float32Array(COUNT * 9); // angle speed radius y size alpha color*3
-    // 银核暖白 → 中段粉 → 外臂蓝紫（饱和度拉高，加法混合下才留得住颜色）
-    const lerp = (a, b, t) => a + (b - a) * t;
-    const armColor = (t) => {
-      const inner = [1.0, 0.85, 0.60], mid = [1.0, 0.50, 0.78], outer = [0.45, 0.60, 1.0];
-      if (t < 0.45) {
-        const k = t / 0.45;
-        return [lerp(inner[0], mid[0], k), lerp(inner[1], mid[1], k), lerp(inner[2], mid[2], k)];
-      }
-      const k = (t - 0.45) / 0.55;
-      return [lerp(mid[0], outer[0], k), lerp(mid[1], outer[1], k), lerp(mid[2], outer[2], k)];
-    };
-    const REF_R = 0.8, REF_W = 0.05; // 开普勒归一化：ω ∝ r^(-3/2)
-    for (let i = 0; i < COUNT; i++) {
-      const o = i * 9;
-      let angle, r, y, size, alpha, col;
-      if (i < ARM_COUNT) {
-        const t = Math.pow(Math.random(), 0.55);          // 0=核 1=外缘
-        r = 0.16 + t * 1.74;
-        const wind = (i % 2) * Math.PI + t * 4.6;         // 旋臂缠绕
-        const scatter = (Math.random() + Math.random() + Math.random() - 1.5) * 0.34 * (1.3 - t * 0.7);
-        angle = wind + scatter;
-        y = (Math.random() + Math.random() - 1) * 0.02 * (1.2 - t);
-        size = rand(0.5, 1.6);
-        alpha = (0.85 - t * 0.35) * rand(0.4, 1);
-        col = armColor(t);
-      } else {
-        // 银核：小球状星团
-        const g1 = Math.random() + Math.random() + Math.random() - 1.5; // 近似高斯
-        r = Math.abs(g1) * 0.15 + 0.02;
-        angle = Math.random() * Math.PI * 2;
-        y = g1 * 0.055;
-        size = rand(0.5, 1.6);
-        alpha = rand(0.6, 1);
-        col = [1.0, 0.95, 0.82];
-      }
-      data[o] = angle;
-      data[o + 1] = REF_W * Math.pow(REF_R / r, 1.5);
-      data[o + 2] = r;
-      data[o + 3] = y;
-      data[o + 4] = size;
-      data[o + 5] = alpha;
-      data[o + 6] = col[0];
-      data[o + 7] = col[1];
-      data[o + 8] = col[2];
-    }
-    this.glCount = COUNT;
-
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    const STRIDE = 36;
-    ["aAngle", "aSpeed", "aRadius", "aY", "aSize", "aAlpha"].forEach((name, k) => {
-      const loc = gl.getAttribLocation(prog, name);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, STRIDE, k * 4);
-    });
-    const locColor = gl.getAttribLocation(prog, "aColor");
-    gl.enableVertexAttribArray(locColor);
-    gl.vertexAttribPointer(locColor, 3, gl.FLOAT, false, STRIDE, 24);
-
-    this.uTime = gl.getUniformLocation(prog, "uTime");
-    this.uAspect = gl.getUniformLocation(prog, "uAspect");
-    this.uTilt = gl.getUniformLocation(prog, "uTilt");
-
-    gl.disable(gl.DEPTH_TEST);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // 加法混合，星点叠加发亮
-    gl.clearColor(0, 0, 0, 0);
-
-    // 3x3 矩阵小工具（列主序）
-    const m3mul = (A, B) => {
-      const o = new Float32Array(9);
-      for (let j = 0; j < 3; j++)
-        for (let i = 0; i < 3; i++)
-          o[j * 3 + i] = A[i] * B[j * 3] + A[3 + i] * B[j * 3 + 1] + A[6 + i] * B[j * 3 + 2];
-      return o;
-    };
-    const rotX = (a) => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([1, 0, 0, 0, c, s, 0, -s, c]); };
-    const rotY = (a) => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 1, 0, s, 0, c]); };
-    const rotZ = (a) => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, -s, c, 0, 0, 0, 1]); };
-    // 基础倾角：盘面斜对镜头
-    const baseTilt = m3mul(rotZ(-0.35), rotX(0.85));
-    this.computeTilt = () => {
-      const lx = (this.lookX * Math.PI / 180) * 0.35;
-      const ly = (this.lookY * Math.PI / 180) * 0.35;
-      return m3mul(m3mul(rotY(lx), rotX(ly)), baseTilt);
-    };
-
-    const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      cv.width = this.stage.clientWidth * dpr;
-      cv.height = this.stage.clientHeight * dpr;
-      gl.uniform1f(this.uAspect, cv.width / cv.height);
-    };
-    resize();
-    addEventListener("resize", resize);
-  },
-  renderWebGalaxy() {
-    const gl = this.gl;
-    if (!gl) return;
-    gl.viewport(0, 0, this.glCv.width, this.glCv.height);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.uniform1f(this.uTime, performance.now() / 1000);
-    gl.uniformMatrix3fv(this.uTilt, false, this.computeTilt());
-    gl.drawArrays(gl.POINTS, 0, this.glCount);
-  },
-
   /* ----- 背景：流星雨（时常成双成对地划过） ----- */
   maybeShoot() {
     const now = performance.now();
@@ -786,7 +1111,17 @@ const Galaxy = {
     this.stage.appendChild(s);
   },
 
-  enter() { this.running = true; },
+  enter() {
+    // 背景两层都要等页面真正显示出来才量得到尺寸，所以放在这里初始化 / 重量
+    this.resizeStars();
+    if (!this.skyTried) {
+      this.skyTried = true;
+      SaturnSky.init(this.stage);
+    } else {
+      SaturnSky.resize();
+    }
+    this.running = true;
+  },
   leave() { this.running = false; },
 };
 
