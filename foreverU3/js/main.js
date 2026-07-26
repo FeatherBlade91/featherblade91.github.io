@@ -200,18 +200,26 @@ function initHome() {
 }
 
 /* ---------- 3D 旋转相册（无限环） ----------
- * 卡片等距围成圆环，相机位置 cam 连续推进；
- * 飞到后半环的卡片被回收到前进方向的最前端并换上新照片，
- * 因此拖动可以无限持续、照片一张张接续上来。
+ * 卡片围成圆环，每张卡按真实宽高比确定自己的宽度（横图横放、竖图竖放），
+ * 间距不按等分角度，而是沿环按弧长逐个累加：每张卡占据「自身宽度 + GAP」，
+ * 因此无论横竖、多宽，相邻卡片之间永远保持同样的 GAP，不会重叠。
+ * 环总弧长 L = Σ(卡宽 + GAP)，半径 R = L / 2π；
+ * 相机位置 cam（弧长坐标）连续推进，飞到后半环的卡片被回收到
+ * 前进方向的最前端并换上新照片，因此拖动可以无限持续。
  * 注意：半径必须小于 stage 的 perspective，否则卡片会跑到“相机后面”被裁掉。 */
 const Ring = {
   SLOTS: 30,        // 环上同时存在的卡片数
-  cam: 0,           // 相机位置（单位：卡槽）
-  velocity: -0.012, // 单位：卡槽 / 帧
+  GAP: 28,          // 相邻卡片的间距（px，沿环的弧长测量）
+  DEFAULT_V: -2.4,  // 默认自转速度（px / 帧，负值 = 向前）
+  cam: 0,           // 相机位置（沿环的弧长 px，单调可正可负）
+  velocity: -2.4,
   tilt: -6,
   dragging: false,
-  slots: [],        // { el, img, pos, photoIdx }
+  slots: [],        // { el, img, cap, photoIdx, w, h, s }  s = 中心弧长坐标
+  order: [],        // slots 下标，按环上的先后顺序（order[0] 在队尾方向）
+  base: 0,          // order[0] 起始边的绝对弧长坐标
   radius: 0,
+  length: 1,        // 环的总弧长 L
   init() {
     this.ring = $("#ring");
     const stage = $("#ringStage");
@@ -234,30 +242,37 @@ const Ring = {
       lastX = e.clientX;
       lastY = e.clientY;
       if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
-      this.velocity = dx * 0.012;
-      this.cam -= dx * 0.012;
+      this.velocity = dx * 2.4;
+      this.cam -= dx * 2.4;
       this.tilt = Math.max(-24, Math.min(14, this.tilt - dy * 0.08));
     });
     const end = () => { this.dragging = false; };
     window.addEventListener("pointerup", end);
     window.addEventListener("pointercancel", end);
 
-    const stepDeg = 360 / this.SLOTS;
     const loop = () => {
       if (!this.dragging) {
         // 惯性衰减 + 默认缓慢自转，视角缓慢回正
-        this.velocity += (-0.012 - this.velocity) * 0.02;
+        this.velocity += (this.DEFAULT_V - this.velocity) * 0.02;
         this.cam -= this.velocity;
         this.tilt += (-6 - this.tilt) * 0.02;
       }
       this.ring.style.transform = `rotateX(${this.tilt}deg)`;
-      const half = this.SLOTS / 2;
+      // 回收：队尾（order[0]）落到后半环就跳到最前端换照片，反向拖动时对称处理。
+      // 回收会改变总弧长，可能让另一端越界，因此成对反复检查直到两端都收敛
+      let moved = true, guard = 0;
+      const MAX_RECYCLE = this.SLOTS * 4;
+      while (moved && guard < MAX_RECYCLE) {
+        moved = false;
+        while (this.slots[this.order[0]].s - this.cam < -this.length / 2 && guard < MAX_RECYCLE) {
+          this.recycle(1); moved = true; guard++;
+        }
+        while (this.slots[this.order[this.order.length - 1]].s - this.cam >= this.length / 2 && guard < MAX_RECYCLE) {
+          this.recycle(-1); moved = true; guard++;
+        }
+      }
       for (const s of this.slots) {
-        let rel = s.pos - this.cam;
-        // 回收：落到后半环的卡片跳到前进方向最前端，换上接续的照片
-        if (rel < -half) { s.pos += this.SLOTS; this.assign(s); rel = s.pos - this.cam; }
-        else if (rel >= half) { s.pos -= this.SLOTS; this.assign(s); rel = s.pos - this.cam; }
-        const deg = rel * stepDeg;
+        const deg = ((s.s - this.cam) / this.radius) * 180 / Math.PI;
         s.el.style.transform = `rotateY(${deg}deg) translateZ(${this.radius}px)`;
         // 正面亮、背面暗一点，增强立体感
         const c = Math.cos((deg * Math.PI) / 180);
@@ -271,6 +286,10 @@ const Ring = {
     if (!PHOTOS.length) return;
     this.ring.innerHTML = "";
     this.slots = [];
+    this.order = [];
+    this.base = 0;
+    const baseW = this.ring.clientWidth || 170;
+    const baseH = this.ring.clientHeight || 230;
     for (let i = 0; i < this.SLOTS; i++) {
       const card = el("div", "ring-card");
       const img = el("img");
@@ -278,26 +297,57 @@ const Ring = {
       const cap = el("div", "ring-caption");
       card.appendChild(img);
       card.appendChild(cap);
-      const s = { el: card, img, cap, pos: i, photoIdx: -1 };
+      // 宽度先用基础尺寸占位，图片加载完成后 fitCard 按真实宽高比重算
+      const s = { el: card, img, cap, photoIdx: i % PHOTOS.length, w: baseW, h: baseH, s: 0 };
       card.addEventListener("click", () => {
         if (!this.moved && s.photoIdx >= 0) Lightbox.open(s.photoIdx);
       });
       this.ring.appendChild(card);
       this.slots.push(s);
+      this.order.push(i);
       this.assign(s);
     }
-    this.layout();
+    this.recompute();
+  },
+  // 按当前每张卡的实际宽度，沿环逐个累加弧长坐标和半径
+  recompute() {
+    let x = this.base;
+    for (const i of this.order) {
+      const s = this.slots[i];
+      s.s = x + s.w / 2;
+      x += s.w + this.GAP;
+    }
+    this.length = Math.max(x - this.base, 1);
+    this.radius = this.length / (2 * Math.PI);
+  },
+  // dir = 1：队尾卡回收到最前端；dir = -1：队首卡回收到最后端
+  recycle(dir) {
+    const total = PHOTOS.length;
+    let i;
+    if (dir > 0) {
+      i = this.order.shift();
+      const s = this.slots[i];
+      this.base += s.w + this.GAP;
+      const prev = this.slots[this.order[this.order.length - 1]];
+      s.photoIdx = (prev.photoIdx + 1) % total;
+      this.order.push(i);
+    } else {
+      i = this.order.pop();
+      const s = this.slots[i];
+      this.base -= s.w + this.GAP;
+      const next = this.slots[this.order[0]];
+      s.photoIdx = ((next.photoIdx - 1) % total + total) % total;
+      this.order.unshift(i);
+    }
+    this.assign(this.slots[i]);
+    this.recompute();
   },
   layout() {
-    const cardW = this.ring.clientWidth || 170;
-    // 半径必须按「最宽的卡片」算：fitCard 会把横图放宽到 cardW*1.5，
-    // 若按基础宽度算半径，横图会比卡槽弧长还宽，压住相邻卡片
-    const maxCardW = cardW * 1.5;
-    this.radius = Math.round((maxCardW / 2 + 14) / Math.tan(Math.PI / this.SLOTS));
+    // 基础尺寸变化（如横竖屏切换）时，按已加载的真实宽高比全部重排
+    for (const s of this.slots) this.fitCard(s);
+    this.recompute();
   },
   assign(s) {
-    const total = PHOTOS.length;
-    s.photoIdx = ((s.pos % total) + total) % total;
     const p = PHOTOS[s.photoIdx];
     s.img.alt = photoName(p);
     // 图片加载完成后，按真实宽高比调整相框（横图横放、竖图竖放，不裁剪）
@@ -311,20 +361,17 @@ const Ring = {
     const ar = nw / nh;
     const baseW = this.ring.clientWidth || 170;
     const baseH = this.ring.clientHeight || 230;
-    let w, h;
-    if (ar >= 1) {
-      // 横图：放宽宽度，但设上限，避免过宽压住相邻卡片
-      w = Math.min(baseH * ar, baseW * 1.5);
-      h = w / ar;
-    } else {
-      // 竖图：保持原高度
-      h = baseH;
-      w = baseH * ar;
-    }
+    // 统一高度，宽度完全按真实宽高比：横图就是横的、竖图就是竖的；
+    // 不重叠由弧长布局的 GAP 保证，只给极端宽幅全景一个上限
+    const w = Math.min(baseH * ar, baseH * 2.5);
+    const h = w / ar;
+    s.w = w;
+    s.h = h;
     s.el.style.width = w + "px";
     s.el.style.height = h + "px";
     s.el.style.left = (baseW - w) / 2 + "px";
     s.el.style.top = (baseH - h) / 2 + "px";
+    this.recompute();
   },
 };
 
