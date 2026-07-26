@@ -290,7 +290,10 @@ const Ring = {
   },
   layout() {
     const cardW = this.ring.clientWidth || 170;
-    this.radius = Math.round((cardW / 2 + 14) / Math.tan(Math.PI / this.SLOTS));
+    // 半径必须按「最宽的卡片」算：fitCard 会把横图放宽到 cardW*1.5，
+    // 若按基础宽度算半径，横图会比卡槽弧长还宽，压住相邻卡片
+    const maxCardW = cardW * 1.5;
+    this.radius = Math.round((maxCardW / 2 + 14) / Math.tan(Math.PI / this.SLOTS));
   },
   assign(s) {
     const total = PHOTOS.length;
