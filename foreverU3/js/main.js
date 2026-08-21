@@ -25,6 +25,42 @@ function setThumb(img, p) {
   img.src = thumbSrc(p);
 }
 
+/* ---------- 场景拖拽 / 单击判定（3D 相册与星河漫游共用） ----------
+ * 统一的「拖动场景」手势：pointerdown 记下起点，window 级 pointermove
+ * 把每次增量回调给 onDrag(dx, dy)；从起点累计位移超过 CLICK_SLACK 才算
+ * 「拖过」，否则手指松开时元素上相继触发的 click 仍按单击处理。
+ * 想看大图的模式统一在单击里调 Lightbox.open()——
+ * 大图呈现全站只有灯箱这一套，别另写。
+ * 注意：不要用 setPointerCapture，它会把 click 重定向到舞台元素，
+ * 照片卡片上的单击就收不到了。 */
+function makeSceneDrag(stage, onDrag) {
+  const t = {
+    CLICK_SLACK: 7, // 单击容许的指间晃动（px），从按下点起算总位移
+    dragging: false,
+    moved: false,
+    x0: 0, y0: 0, lastX: 0, lastY: 0,
+  };
+  stage.addEventListener("pointerdown", (e) => {
+    t.dragging = true;
+    t.moved = false;
+    t.x0 = t.lastX = e.clientX;
+    t.y0 = t.lastY = e.clientY;
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!t.dragging) return;
+    const dx = e.clientX - t.lastX;
+    const dy = e.clientY - t.lastY;
+    t.lastX = e.clientX;
+    t.lastY = e.clientY;
+    if (Math.hypot(e.clientX - t.x0, e.clientY - t.y0) > t.CLICK_SLACK) t.moved = true;
+    onDrag(dx, dy);
+  });
+  const end = () => { t.dragging = false; };
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+  return t;
+}
+
 /* ---------- 数据加载 ---------- */
 async function loadPhotos() {
   try {
@@ -104,6 +140,7 @@ function switchMode(mode) {
   page.classList.add("active");
   document.body.dataset.mode = mode;
   document.querySelectorAll(".nav-pill").forEach((n) => n.classList.toggle("active", n.dataset.mode === mode));
+  ModeSettings.setMode(mode);
   if (mode === "slideshow") Slideshow.enter();
   else Slideshow.leave();
   if (mode === "galaxy") Galaxy.enter();
@@ -210,14 +247,22 @@ function initHome() {
  * 相机位置 cam（弧长坐标）连续推进，飞到后半环的卡片被回收到
  * 前进方向的最前端并换上新照片，因此拖动可以无限持续。
  * 舞台的 perspective 不写死，而是按 R 反推（见 recompute），让最前排的卡片
- * 稳定放大到 FRONT_ZOOM 倍——否则照片一多、环一大，前排就会糊到糊满屏幕。 */
+ * 稳定放大到 FRONT_ZOOM 倍——否则照片一多、环一大，前排就会糊到糊满屏幕。
+ * 右上角设置面板（ModeSettings）能调两样：自转速度与图片大小。图片大小直接
+ * 乘在 unit() 的基准边长上（真实的 px 缩放，相对整个页面生效），而间距 GAP
+ * 是恒定值、不随缩放变——弧长累加的布局保证了任意缩放下相邻卡片都不遮挡。 */
 const Ring = {
   SLOTS: 30,        // 环上同时存在的卡片数
-  GAP: 28,          // 相邻卡片的间距（px，沿环的弧长测量）
+  GAP: 28,          // 相邻卡片的间距（px，沿环的弧长测量）——恒定，不随图片大小设置变
   FRONT_ZOOM: 1.3,  // 最前排卡片相对实际尺寸的放大倍数
-  DEFAULT_V: -2.4,  // 默认自转速度（px / 帧，负值 = 向前）
+  DEF_SPEED: 1.2,   // 默认自转速度（px / 帧；设置面板上线前的老速度是 2.4，减半）
+  SPEED_MAX: 4.8,   // 速度滑条上限（老速度的 2 倍）
+  DEF_SIZE: 1.6,    // 默认图片大小（舞台基准的倍数；面板上线前是 1.0）
+  SIZE_MIN: 0.5,    // 大小滑条范围
+  SIZE_MAX: 2.2,
   cam: 0,           // 相机位置（沿环的弧长 px，单调可正可负）
-  velocity: -2.4,
+  velocity: 0,
+  cfg: null,        // { speed, size } 用户设置，loadCfg 从 localStorage 恢复
   tilt: -6,
   dragging: false,
   slots: [],        // { el, img, cap, photoIdx, w, h, s }  s = 中心弧长坐标
@@ -226,40 +271,24 @@ const Ring = {
   radius: 0,
   length: 1,        // 环的总弧长 L
   init() {
+    this.loadCfg();
     this.ring = $("#ring");
     this.stage = $("#ringStage");
     const stage = this.stage;
     this.build();
     addEventListener("resize", () => this.layout());
 
-    let lastX = 0, lastY = 0;
-    // 注意：不要用 setPointerCapture——它会把 click 重定向到 stage，
-    // 导致卡片上的点击放大永远触发不了
-    stage.addEventListener("pointerdown", (e) => {
-      this.dragging = true;
-      this.moved = false;
-      lastX = e.clientX;
-      lastY = e.clientY;
-    });
-    window.addEventListener("pointermove", (e) => {
-      if (!this.dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
+    // 拖拽 / 单击判定走共用的 makeSceneDrag，单击看大图走共用的 Lightbox
+    this.track = makeSceneDrag(stage, (dx, dy) => {
       this.velocity = dx * 2.4;
       this.cam -= dx * 2.4;
       this.tilt = Math.max(-24, Math.min(14, this.tilt - dy * 0.08));
     });
-    const end = () => { this.dragging = false; };
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
 
     const loop = () => {
-      if (!this.dragging) {
-        // 惯性衰减 + 默认缓慢自转，视角缓慢回正
-        this.velocity += (this.DEFAULT_V - this.velocity) * 0.02;
+      if (!this.track.dragging) {
+        // 惯性衰减 + 默认缓慢自转（速度可在右上角设置面板调），视角缓慢回正
+        this.velocity += (-this.cfg.speed - this.velocity) * 0.02;
         this.cam -= this.velocity;
         this.tilt += (-6 - this.tilt) * 0.02;
       }
@@ -291,13 +320,40 @@ const Ring = {
     };
     loop();
   },
+  /* ----- 设置面板的存取（右上角 ⚙ → 3D 相册） ----- */
+  loadCfg() {
+    let cfg = { speed: this.DEF_SPEED, size: this.DEF_SIZE };
+    try {
+      cfg = Object.assign(cfg, JSON.parse(localStorage.getItem("ringCfg") || "{}"));
+    } catch (e) { /* 存了坏数据就回落默认 */ }
+    // 越界值（比如手改过 localStorage）夹回滑条范围
+    cfg.speed = Math.max(0, Math.min(this.SPEED_MAX, +cfg.speed || 0));
+    cfg.size = Math.max(this.SIZE_MIN, Math.min(this.SIZE_MAX, +cfg.size || 0));
+    this.cfg = cfg;
+    this.velocity = -cfg.speed;
+  },
+  saveCfg() {
+    localStorage.setItem("ringCfg", JSON.stringify(this.cfg));
+  },
+  setSpeed(v) { this.cfg.speed = v; this.saveCfg(); },
+  setSize(v) { this.cfg.size = v; this.saveCfg(); this.layout(); },
+  resetCfg() {
+    this.cfg.speed = this.DEF_SPEED;
+    this.cfg.size = this.DEF_SIZE;
+    this.saveCfg();
+    this.layout();
+  },
   // 卡片的基准尺寸 u：横竖两种规格都以它为“面积边长”，跟着舞台大小走。
-  // 前排放大 FRONT_ZOOM 倍后，竖图（最高的那种）大约占舞台高度的一半。
+  // 设置面板的「图片大小」直接乘在 u 上，是真实的 px 缩放，相对整个页面生效。
+  // 前排放大 FRONT_ZOOM 倍后，竖图（最高的常见规格 3:4，高约 1.16u）大约
+  // 占舞台高度的一半；再给 u 一个上限，保证极限调大时前排竖图也不会越过舞台。
   unit() {
     const w = (this.stage && this.stage.clientWidth) || innerWidth;
     const h = (this.stage && this.stage.clientHeight) || innerHeight;
     // 窄屏放宽横向占比，不然手机上照片小得看不清
-    return Math.max(96, Math.min(0.34 * h, (w < 640 ? 0.46 : 0.34) * w, 300));
+    const base = Math.max(96, Math.min(0.34 * h, (w < 640 ? 0.46 : 0.34) * w, 300));
+    const maxU = (h * 0.98) / (1.16 * this.FRONT_ZOOM);
+    return Math.min(base * this.cfg.size, maxU);
   },
   build() {
     if (!PHOTOS.length) return;
@@ -320,7 +376,7 @@ const Ring = {
       card.style.left = (-s.w / 2).toFixed(1) + "px";
       card.style.top = (-s.h / 2).toFixed(1) + "px";
       card.addEventListener("click", () => {
-        if (!this.moved && s.photoIdx >= 0) Lightbox.open(s.photoIdx);
+        if (!this.track.moved && s.photoIdx >= 0) Lightbox.open(s.photoIdx);
       });
       this.ring.appendChild(card);
       this.slots.push(s);
@@ -369,9 +425,17 @@ const Ring = {
     this.recompute();
   },
   layout() {
-    // 基础尺寸变化（如横竖屏切换）时，按已加载的真实宽高比全部重排
+    // 基础尺寸变化（横竖屏切换、设置面板调图片大小）时，按真实宽高比全部重排。
+    // 先记住当前离相机最近的那张卡，重排后把相机挪回它旁边——
+    // 这样调大调小照片时最前排还是同一张，不会突然换照片。
+    let front = null;
+    for (const s of this.slots) {
+      if (!front || Math.abs(s.s - this.cam) < Math.abs(front.s - this.cam)) front = s;
+    }
+    const off = front ? front.s - this.cam : 0;
     for (const s of this.slots) this.fitCard(s);
     this.recompute();
+    if (front) this.cam = front.s - off;
   },
   // 页面藏着的时候 stage 量不到尺寸，进来时按真实舞台重排一次
   enter() { this.layout(); },
@@ -420,7 +484,8 @@ const SaturnSky = {
   ready: false,
 
   /* ===== 4×4 / 3×3 矩阵小工具（列主序，可直接喂给 WebGL） ===== */
-  // shiftX / shiftY：镜头平移，把土星推离画面正中（正中留给照片隧道）
+  // shiftX / shiftY：镜头平移（NDC 单位）。土星现在居中，传 0；
+  // 参数保留着，以后想把天体挪离正中直接改调用处即可
   perspective(fovy, aspect, near, far, shiftX, shiftY) {
     const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
     return new Float32Array([
@@ -686,7 +751,9 @@ const SaturnSky = {
        void main() {
          vec3 N = normalize(vNor);
          vec3 base = texture2D(uTex, vUv).rgb;
-         vec3 L = normalize(vec3(300.0, 80.0, 200.0));   // 太阳 0xfff5e0 强度 2.2
+         // 光源挂在镜头旁（略偏上）：土星无论公转/被拖到哪个角度，
+         // 亮面始终朝向观众，只剩上下一点明暗渐变保住立体感
+         vec3 L = normalize(uEye - vWorld + vec3(0.0, 50.0, 0.0));
          float diff = max(dot(N, L), 0.0);
          vec3 col = base * vec3(1.0, 0.961, 0.878) * diff * 2.2;
          col += base * vec3(0.067, 0.133, 0.267) * 0.6;  // 环境光 0x112244
@@ -794,7 +861,11 @@ const SaturnSky = {
     gl.viewport(0, 0, W, H);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    // 机位：绕土星缓慢转圈（对应 OrbitControls 的 autoRotate），拖拽时叠加偏移
+    // 机位：绕土星缓慢转圈（对应 OrbitControls 的 autoRotate），拖拽环顾时
+    // 叠加轨道角——土星钉在画面正中原地转身，表面特征的扫动方向与照片、
+    // 星幕一致（手指往左拖，三层画面都往左走）：
+    // lookX > 0（往左拖 / 镜头向右看）→ az 增大 → 土星特征向左扫；
+    // lookY > 0（往下拖 / 镜头向上看）→ elev 增大 → 特征向下扫。
     const az = t * 0.018 + lookX * 0.012; // 约 350 秒转一圈，跟 saturn.html 的 autoRotate 同量级
     const elev = Math.max(0.06, Math.min(0.9, 0.36 + lookY * 0.008));
     const aspect = W / H;
@@ -805,7 +876,8 @@ const SaturnSky = {
       Math.sin(elev) * d,
       Math.cos(az) * Math.cos(elev) * d,
     ];
-    const proj = this.perspective(Math.PI / 4, aspect, 1, 4000, wide ? -0.38 : -0.1, wide ? 0.2 : 0.36);
+    // 土星居中：不额外平移，照片隧道穿过它时靠前后景深自然错开
+    const proj = this.perspective(Math.PI / 4, aspect, 1, 4000, 0, 0);
     const view = this.lookAt(eye, [0, 0, 0]);
     const pxScale = H / 900; // 点的大小跟分辨率走，换屏幕不会忽大忽小
 
@@ -921,7 +993,7 @@ const Galaxy = {
       it.full = p.src;
       it.el.appendChild(it.img);
       it.el.addEventListener("click", () => {
-        if (!this.moved) Lightbox.open(it.photoIdx);
+        if (!this.track.moved) Lightbox.open(it.photoIdx);
       });
       this.space.appendChild(it.el);
       this.place(it);
@@ -932,27 +1004,13 @@ const Galaxy = {
     // 背景星幕（土星那层等首次进入时再建，见 enter）
     this.initStarfield();
 
-    // 拖拽环顾四周（不用 setPointerCapture，否则会抢走照片上的 click）
-    let lastX = 0, lastY = 0, dragging = false;
-    this.stage.addEventListener("pointerdown", (e) => {
-      dragging = true;
-      this.moved = false;
-      lastX = e.clientX;
-      lastY = e.clientY;
+    // 拖拽 / 单击判定走共用的 makeSceneDrag（不用 setPointerCapture，
+    // 否则会抢走照片上的 click）。方向约定：跟手——往左拖场景往左走
+    // （相当于镜头往右看），上下同理，照片、星幕、土星三层全部一致。
+    this.track = makeSceneDrag(this.stage, (dx, dy) => {
+      this.lookX = Math.max(-32, Math.min(32, this.lookX - dx * 0.06));
+      this.lookY = Math.max(-24, Math.min(24, this.lookY + dy * 0.06));
     });
-    window.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
-      this.lookX = Math.max(-32, Math.min(32, this.lookX + dx * 0.06));
-      this.lookY = Math.max(-24, Math.min(24, this.lookY - dy * 0.06));
-    });
-    const end = () => { dragging = false; };
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
     // 滚轮加速 / 减速穿梭
     this.stage.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -1057,9 +1115,11 @@ const Galaxy = {
     const W = cv.width, H = cv.height;
     const cx = W / 2, cy = H / 2, P = this.PERSPECTIVE;
     const t = performance.now() / 1000;
-    // 拖拽环顾时星幕也跟着轻微视差
+    // 拖拽环顾时星幕也跟着视差。方向与照片层一致（跟手）：
+    // lookX 向右看 → 星幕左移；lookY 向下看 → 星幕下移，
+    // 所以 oy 取负（rotateX 的正角把照片往下带，与 tan 的符号相反）。
     const ox = Math.tan((this.lookX * Math.PI) / 180) * P;
-    const oy = Math.tan((this.lookY * Math.PI) / 180) * P;
+    const oy = -Math.tan((this.lookY * Math.PI) / 180) * P;
     g.clearRect(0, 0, W, H);
     for (const s of this.stars) {
       let rel = s.z - this.cam;
@@ -1338,6 +1398,110 @@ function initMusic() {
   });
 }
 
+/* ---------- 右上角「本页设置」面板 ----------
+ * ⚙ 按钮在每个子页面下打开不同的设置面板：面板定义在 defs 里，想给星河漫游 /
+ * 幻灯片加设置时再登记一项即可；没有登记的子页面会直接隐藏 ⚙ 按钮。
+ * 目前只有 3D 相册（ring）：旋转速度 + 图片大小两个滑条，
+ * 每次拖动即时生效并存 localStorage，可一键恢复默认值。 */
+const ModeSettings = {
+  defs: {
+    ring: {
+      title: "🎡 3D 相册设置",
+      rows: [
+        {
+          label: "旋转速度",
+          min: 0, max: Ring.SPEED_MAX, step: 0.1,
+          get: () => Ring.cfg.speed,
+          set: (v) => Ring.setSpeed(v),
+          // 以新默认（老速度的一半）为 100%
+          fmt: (v) => Math.round((v / Ring.DEF_SPEED) * 100) + "%",
+        },
+        {
+          label: "图片大小",
+          min: Ring.SIZE_MIN, max: Ring.SIZE_MAX, step: 0.05,
+          get: () => Ring.cfg.size,
+          set: (v) => Ring.setSize(v),
+          fmt: (v) => v.toFixed(2) + "×",
+        },
+      ],
+      reset: () => Ring.resetCfg(),
+    },
+  },
+  btn: null, pop: null, mode: null,
+  init() {
+    this.btn = $("#settingsToggle");
+    this.pop = $("#settingsPop");
+    $("#settingsClose").addEventListener("click", () => this.close());
+    $("#settingsReset").addEventListener("click", () => {
+      const def = this.defs[this.mode];
+      if (def && def.reset) def.reset();
+      this.build(); // 重置后重建滑条，位置和数值一起刷新
+    });
+    this.btn.addEventListener("click", () =>
+      this.pop.classList.contains("open") ? this.close() : this.open()
+    );
+    // 点到面板和按钮以外的地方就收起
+    document.addEventListener("click", (e) => {
+      if (!this.pop.classList.contains("open")) return;
+      if (this.pop.contains(e.target) || this.btn.contains(e.target)) return;
+      this.close();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this.close();
+    });
+    // 初始页面（可能带着 #hash 之外的默认页）也要先定一次按钮的显隐
+    const active = document.querySelector(".mode-page.active");
+    this.setMode(active ? active.id.replace("page-", "") : "");
+  },
+  // 切换子页面时调用：没有设置项的页面藏按钮、收面板
+  setMode(mode) {
+    this.mode = this.defs[mode] ? mode : null;
+    this.btn.style.display = this.mode ? "" : "none";
+    this.btn.title = this.mode ? this.defs[this.mode].title : "设置";
+    this.close();
+  },
+  open() {
+    if (!this.mode) return;
+    this.build();
+    this.pop.classList.add("open");
+  },
+  close() { this.pop.classList.remove("open"); },
+  build() {
+    const def = this.defs[this.mode];
+    if (!def) return;
+    $("#settingsTitle").textContent = def.title;
+    const body = $("#settingsBody");
+    body.innerHTML = "";
+    for (const r of def.rows) body.appendChild(this.sliderRow(r));
+  },
+  // 一行设置：标签 + 实时数值 + 滑动条，拖动即时生效并记住
+  sliderRow(r) {
+    const row = el("div", "set-row");
+    const head = el("div", "set-head");
+    const label = el("span", "set-label");
+    label.textContent = r.label;
+    const val = el("span", "set-val");
+    const range = el("input", "set-range");
+    range.type = "range";
+    range.min = r.min;
+    range.max = r.max;
+    range.step = r.step;
+    range.value = r.get();
+    range.setAttribute("aria-label", r.label);
+    const sync = () => { val.textContent = r.fmt(+range.value); };
+    range.addEventListener("input", () => {
+      r.set(+range.value);
+      sync();
+    });
+    sync();
+    head.appendChild(label);
+    head.appendChild(val);
+    row.appendChild(head);
+    row.appendChild(range);
+    return row;
+  },
+};
+
 /* ---------- 启动 ---------- */
 (async function boot() {
   await loadPhotos();
@@ -1351,6 +1515,7 @@ function initMusic() {
   Slideshow.init();
   Ring.init();
   Galaxy.init();
+  ModeSettings.init();
   // buildTimeline(); // 时间轴暂时下线：照片时间尚未标注
   // 支持 #ring / #galaxy / #slideshow 直达
   if (location.hash) switchMode(location.hash.slice(1));

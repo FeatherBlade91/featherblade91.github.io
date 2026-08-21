@@ -162,6 +162,63 @@ body[data-mode="slideshow"] .music-btn.playing .music-note { color: #9fd2ff; }
   50% { transform: rotate(12deg) scale(1.2); }
 }
 .admin-btn { top: 20px; right: 80px; color: var(--chrome-fg); font-size: 18px; }
+.settings-btn { top: 20px; right: 140px; color: var(--chrome-fg); font-size: 18px; }
+
+/* ===== 本页设置弹窗（右上角 ⚙，内容随子页面变化） ===== */
+.settings-pop {
+  position: fixed; top: 78px; right: 20px; z-index: 61;
+  width: min(300px, calc(100vw - 40px));
+  padding: 14px 18px 16px; border-radius: 18px;
+  background: var(--chrome-bg); border: 1px solid var(--chrome-border);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: var(--chrome-shadow); color: var(--chrome-fg);
+  display: none;
+}
+.settings-pop.open { display: block; animation: settingsIn 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes settingsIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.settings-title { font-size: 14px; font-weight: 600; letter-spacing: 1px; text-shadow: var(--chrome-text-shadow); }
+.settings-close {
+  width: 28px; height: 28px; border-radius: 50%; font-size: 13px;
+  color: var(--chrome-fg); transition: all 0.25s ease;
+}
+.settings-close:hover { background: rgba(242, 114, 168, 0.14); color: var(--pink-deep); }
+.set-row { padding: 8px 0 2px; }
+.set-head { display: flex; justify-content: space-between; font-size: 13px; letter-spacing: 1px; margin-bottom: 6px; }
+.set-val { font-weight: 600; color: var(--chrome-accent); font-variant-numeric: tabular-nums; }
+.set-range {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 20px; background: transparent; cursor: pointer;
+}
+.set-range::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--blue-2), var(--pink-2));
+}
+.set-range::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px;
+  border-radius: 50%; background: #fff; border: 2px solid var(--pink-deep);
+  box-shadow: 0 2px 8px rgba(242, 114, 168, 0.45);
+  transition: transform 0.15s ease;
+}
+.set-range::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.set-range::-moz-range-track {
+  height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--blue-2), var(--pink-2));
+}
+.set-range::-moz-range-thumb {
+  width: 15px; height: 15px; border-radius: 50%; background: #fff;
+  border: 2px solid var(--pink-deep); box-shadow: 0 2px 8px rgba(242, 114, 168, 0.45);
+}
+.settings-reset {
+  margin-top: 10px; width: 100%; padding: 8px 0; border-radius: 999px;
+  font-size: 13px; letter-spacing: 1px; color: var(--chrome-fg);
+  background: rgba(255, 255, 255, 0.35); border: 1px solid var(--chrome-border);
+  transition: all 0.25s ease;
+}
+.settings-reset:hover { color: var(--pink-deep); transform: translateY(-1px); }
 
 /* ===== 模式导航 ===== */
 .mode-nav {
@@ -588,10 +645,14 @@ body[data-mode="slideshow"] .nav-pill.active {
 }
 
 /* ===== 响应式 ===== */
-@media (max-width: 720px) {
+/* 右上角现在有三个按钮（音乐 / 管理 / 设置），720–860px 的窄窗口里
+ * 顶部导航条会挤到它们，断点从 720 放宽到 860，把导航条挪到底部 */
+@media (max-width: 860px) {
   .mode-nav { top: auto; bottom: 14px; max-width: calc(100vw - 24px); }
   .music-btn { top: 14px; right: 14px; }
   .admin-btn { top: 14px; right: 70px; }
+  .settings-btn { top: 14px; right: 126px; }
+  .settings-pop { top: 70px; right: 14px; }
   .mode-page { padding: 84px 14px 110px; }
   #page-slideshow, #page-galaxy { padding: 0; }
   .timeline-line { left: 14px; }

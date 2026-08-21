@@ -21,7 +21,8 @@
   <button id="musicToggle" class="float-btn music-btn" title="播放 / 暂停音乐" aria-label="音乐开关">
     <span class="music-note">♪</span>
   </button>
-  <a class="float-btn admin-btn" href="admin.html" title="管理相册">⚙</a>
+  <a class="float-btn admin-btn" href="admin.html" title="管理相册">🛠️</a>
+  <button id="settingsToggle" class="float-btn settings-btn" title="设置" aria-label="设置">⚙</button>
 
   <!-- ===== 模式导航 ===== -->
   <nav class="mode-nav" id="modeNav">
@@ -106,6 +107,16 @@
     <!-- 时间轴暂时下线：照片时间尚未标注，恢复时把下面的导航和本区块加回即可 -->
 
   </main>
+
+  <!-- ===== 本页设置弹窗（右上角 ⚙，各子页面内容不同，见 main.js 的 ModeSettings） ===== -->
+  <div class="settings-pop" id="settingsPop">
+    <div class="settings-head">
+      <span class="settings-title" id="settingsTitle"></span>
+      <button class="settings-close" id="settingsClose" aria-label="关闭设置">✕</button>
+    </div>
+    <div class="settings-body" id="settingsBody"></div>
+    <button class="settings-reset" id="settingsReset">↺ 重置为默认值</button>
+  </div>
 
   <!-- ===== 照片灯箱 ===== -->
   <div class="lightbox" id="lightbox">
