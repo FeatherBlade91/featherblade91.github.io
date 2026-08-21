@@ -480,7 +480,8 @@ const SaturnSky = {
   FLATTEN: 0.89,                // 扁率：土星两极明显压扁
   RING_COUNT: 46000,
   STAR_COUNT: 6000,
-  DIST: 215,                    // 相机到土星的距离
+  DIST: 215,                    // 相机到土星的基准距离
+  scale: 1.8,                   // 行星大小（本体+星环+辉光等比例）：除进相机距离，越大越近越显大
   ready: false,
 
   /* ===== 4×4 / 3×3 矩阵小工具（列主序，可直接喂给 WebGL） ===== */
@@ -859,6 +860,10 @@ const SaturnSky = {
     if (!gl || !this.ready) return;
     const W = this.cv.width, H = this.cv.height;
     gl.viewport(0, 0, W, H);
+    // 深度的 clear 受 depthMask 掩码控制，而上一帧结尾（环/辉光 pass）把它关了——
+    // 不先打开，深度缓冲永远清不掉，行星本体会被上一帧的残影深度整块挡掉，
+    // 只剩环粒子和辉光的一点光晕（曾经长期把那团光误当成土星本体）
+    gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     // 机位：绕土星缓慢转圈（对应 OrbitControls 的 autoRotate），拖拽环顾时
@@ -870,7 +875,9 @@ const SaturnSky = {
     const elev = Math.max(0.06, Math.min(0.9, 0.36 + lookY * 0.008));
     const aspect = W / H;
     const wide = aspect > 1.1;
-    const d = this.DIST * (wide ? 1 : 1.5); // 竖屏视野窄，退远一点免得土星占满整块屏
+    // scale 是「行星大小」设置（等比例，含星环和辉光——它们都以世界单位画在
+    // 土星旁边，改距离就整体一起变大变小）；竖屏视野窄，退远一点免得占满整块屏
+    const d = (this.DIST / this.scale) * (wide ? 1 : 1.5);
     const eye = [
       Math.sin(az) * Math.cos(elev) * d,
       Math.sin(elev) * d,
@@ -944,13 +951,20 @@ const SaturnSky = {
  * 照片散落在一条 3D 隧道里，相机匀速向前穿梭；
  * 隧道里同一时刻只保留少量照片槽位，飞过身后的槽位回收并
  * 换成未出场的照片，循环展示全集，控制内存与渲染开销。
- * 背景层：远处一颗 WebGL 土星（SaturnSky）+ canvas 星幕（深度视差 + 闪烁）+ 流星雨。 */
+ * 背景层：远处一颗 WebGL 土星（SaturnSky）+ canvas 星幕（深度视差 + 闪烁）+ 流星雨。
+ * 右上角设置面板（ModeSettings）能调三样：行星大小 / 单次照片数量 / 照片消失距离。 */
 const Galaxy = {
   DEPTH: 7000,         // 隧道总长（px）
-  VISIBLE_DEPTH: 4600, // 超过这个深度的照片隐藏且不加载，控制内存和流量
   PERSPECTIVE: 900,    // 与 .galaxy-stage 的 perspective 保持一致
-  // 单次渲染的照片数：同屏越少越流畅（原来 36 张，掉帧明显），小屏再少一些
-  SLOTS: innerWidth < 768 ? 10 : 18,
+  /* ----- 设置面板的三项：默认值 + 滑条范围（存 localStorage，见 loadCfg） ----- */
+  DEF_PLANET: 1.8,     // 行星大小：等比例缩放土星（含星环），直接作用在 SaturnSky.scale
+  PLANET_MIN: 0.5,
+  PLANET_MAX: 3.0,
+  DEF_SLOTS: innerWidth < 768 ? 10 : 18, // 单次照片数默认值：小屏少一些
+  MIN_SLOTS: 4,
+  MAX_SLOTS: 30,       // 同屏越多越吃性能（36 张时明显掉帧），封顶 30
+  DEF_DEPTH: 4600,     // 照片消失距离：超过这个深度的照片隐藏且不加载，控制内存和流量
+  MIN_DEPTH: 1200,
   cam: 0,
   speed: 2.4,
   speedBoost: 0,
@@ -961,46 +975,12 @@ const Galaxy = {
   nextPhoto: 0,
   nextShoot: 0,
   running: false,
+  cfg: null,   // { planet, slots, depth } 用户设置，loadCfg 从 localStorage 恢复
   init() {
+    this.loadCfg();
     this.stage = $("#galaxyStage");
     this.space = $("#galaxySpace");
-    const total = PHOTOS.length;
-    const slotCount = Math.min(this.SLOTS, total);
-    for (let s = 0; s < slotCount; s++) {
-      const it = {
-        el: el("div", "galaxy-photo"),
-        img: el("img"),
-        photoIdx: s,
-        x: rand(-46, 46),          // vw
-        y: rand(-38, 38),          // vh
-        z: rand(400, this.DEPTH),  // 距离相机的深度
-        visible: false,
-        loaded: false,
-      };
-      const p = PHOTOS[s];
-      it.el.style.visibility = "hidden";
-      it.img.alt = photoName(p);
-      it.img.decoding = "async";
-      // 图片加载完成后，按真实宽高比调整相框（横图横放、竖图竖放，不裁剪）
-      it.img.onload = () => {
-        const nw = it.img.naturalWidth, nh = it.img.naturalHeight;
-        if (!nw || !nh) return;
-        it.el.style.aspectRatio = nw + " / " + nh;
-        // 横图放宽宽度，不然长边被压得太小
-        if (nw > nh) it.el.style.width = "clamp(170px, 24vw, 320px)";
-      };
-      it.src = thumbSrc(p);
-      it.full = p.src;
-      it.el.appendChild(it.img);
-      it.el.addEventListener("click", () => {
-        if (!this.track.moved) Lightbox.open(it.photoIdx);
-      });
-      this.space.appendChild(it.el);
-      this.place(it);
-      this.items.push(it);
-    }
-    this.nextPhoto = slotCount;
-
+    this.buildSlots();
     // 背景星幕（土星那层等首次进入时再建，见 enter）
     this.initStarfield();
 
@@ -1046,7 +1026,7 @@ const Galaxy = {
             it.el.style.opacity = "0";
             continue;
           }
-          const vis = rel < this.VISIBLE_DEPTH;
+          const vis = rel < this.cfg.depth; // 「照片消失距离」每帧现读，滑条拖动即时生效
           if (vis !== it.visible) {
             it.visible = vis;
             it.el.style.visibility = vis ? "" : "hidden";
@@ -1070,6 +1050,81 @@ const Galaxy = {
   place(it) {
     it.el.style.transform =
       `translate(-50%, -50%) translate3d(${it.x}vw, ${it.y}vh, ${-it.z}px)`;
+  },
+
+  /* ----- 设置面板的存取（右上角 ⚙ → 星河漫游） ----- */
+  loadCfg() {
+    let cfg = { planet: this.DEF_PLANET, slots: this.DEF_SLOTS, depth: this.DEF_DEPTH };
+    try {
+      cfg = Object.assign(cfg, JSON.parse(localStorage.getItem("galaxyCfg") || "{}"));
+    } catch (e) { /* 存了坏数据就回落默认 */ }
+    // 越界值（比如手改过 localStorage）夹回滑条范围
+    const clamp = (v, lo, hi, dflt) => (isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dflt);
+    cfg.planet = clamp(+cfg.planet, this.PLANET_MIN, this.PLANET_MAX, this.DEF_PLANET);
+    cfg.slots = Math.round(clamp(+cfg.slots, this.MIN_SLOTS, this.MAX_SLOTS, this.DEF_SLOTS));
+    cfg.depth = clamp(+cfg.depth, this.MIN_DEPTH, this.DEPTH, this.DEF_DEPTH);
+    this.cfg = cfg;
+    SaturnSky.scale = cfg.planet;
+  },
+  saveCfg() {
+    localStorage.setItem("galaxyCfg", JSON.stringify(this.cfg));
+  },
+  setPlanet(v) { this.cfg.planet = v; this.saveCfg(); SaturnSky.scale = v; },
+  // 同屏照片数实时增减：新增的槽位生成在当前机位前方的隧道深处，飞近了
+  // 自然淡入；减少的从末尾摘掉，其余照片的分布不受影响
+  setSlots(v) {
+    this.cfg.slots = Math.round(v);
+    this.saveCfg();
+    this.buildSlots();
+  },
+  setDepth(v) { this.cfg.depth = v; this.saveCfg(); },
+  resetCfg() {
+    this.cfg.planet = this.DEF_PLANET;
+    this.cfg.slots = this.DEF_SLOTS;
+    this.cfg.depth = this.DEF_DEPTH;
+    this.saveCfg();
+    SaturnSky.scale = this.cfg.planet;
+    this.buildSlots();
+  },
+  // 按 cfg.slots 增删照片槽位（init 与设置面板共用），照片总数不足时封顶
+  buildSlots() {
+    const want = Math.min(this.cfg.slots, PHOTOS.length);
+    while (this.items.length < want) this.items.push(this.makeItem());
+    while (this.items.length > want) this.items.pop().el.remove();
+  },
+  makeItem() {
+    const it = {
+      el: el("div", "galaxy-photo"),
+      img: el("img"),
+      photoIdx: this.nextPhoto % PHOTOS.length,
+      x: rand(-46, 46),          // vw
+      y: rand(-38, 38),          // vh
+      z: this.cam + rand(400, this.DEPTH), // 距相机的深度（中途增补时从当前机位前方生成）
+      visible: false,
+      loaded: false,
+    };
+    this.nextPhoto++;
+    const p = PHOTOS[it.photoIdx];
+    it.el.style.visibility = "hidden";
+    it.img.alt = photoName(p);
+    it.img.decoding = "async";
+    // 图片加载完成后，按真实宽高比调整相框（横图横放、竖图竖放，不裁剪）
+    it.img.onload = () => {
+      const nw = it.img.naturalWidth, nh = it.img.naturalHeight;
+      if (!nw || !nh) return;
+      it.el.style.aspectRatio = nw + " / " + nh;
+      // 横图放宽宽度，不然长边被压得太小
+      if (nw > nh) it.el.style.width = "clamp(170px, 24vw, 320px)";
+    };
+    it.src = thumbSrc(p);
+    it.full = p.src;
+    it.el.appendChild(it.img);
+    it.el.addEventListener("click", () => {
+      if (!this.track.moved) Lightbox.open(it.photoIdx);
+    });
+    this.space.appendChild(it.el);
+    this.place(it);
+    return it;
   },
 
   /* ----- 背景：星幕 canvas -----
@@ -1399,9 +1454,11 @@ function initMusic() {
 }
 
 /* ---------- 右上角「本页设置」面板 ----------
- * ⚙ 按钮在每个子页面下打开不同的设置面板：面板定义在 defs 里，想给星河漫游 /
- * 幻灯片加设置时再登记一项即可；没有登记的子页面会直接隐藏 ⚙ 按钮。
- * 目前只有 3D 相册（ring）：旋转速度 + 图片大小两个滑条，
+ * ⚙ 按钮在每个子页面下打开不同的设置面板：面板定义在 defs 里，想给别的
+ * 子页面加设置再登记一项即可；没有登记的子页面会直接隐藏 ⚙ 按钮。
+ * 目前有两页：
+ *   3D 相册（ring）：旋转速度 + 图片大小；
+ *   星河漫游（galaxy）：行星大小 + 单次照片数量 + 照片消失距离。
  * 每次拖动即时生效并存 localStorage，可一键恢复默认值。 */
 const ModeSettings = {
   defs: {
@@ -1425,6 +1482,33 @@ const ModeSettings = {
         },
       ],
       reset: () => Ring.resetCfg(),
+    },
+    galaxy: {
+      title: "🌌 星河漫游设置",
+      rows: [
+        {
+          label: "行星大小",
+          min: Galaxy.PLANET_MIN, max: Galaxy.PLANET_MAX, step: 0.05,
+          get: () => Galaxy.cfg.planet,
+          set: (v) => Galaxy.setPlanet(v),
+          fmt: (v) => v.toFixed(2) + "×",
+        },
+        {
+          label: "单次照片数量",
+          min: Galaxy.MIN_SLOTS, max: Galaxy.MAX_SLOTS, step: 1,
+          get: () => Galaxy.cfg.slots,
+          set: (v) => Galaxy.setSlots(v),
+          fmt: (v) => v + " 张",
+        },
+        {
+          label: "照片消失距离",
+          min: Galaxy.MIN_DEPTH, max: Galaxy.DEPTH, step: 100,
+          get: () => Galaxy.cfg.depth,
+          set: (v) => Galaxy.setDepth(v),
+          fmt: (v) => Math.round(v) + " px",
+        },
+      ],
+      reset: () => Galaxy.resetCfg(),
     },
   },
   btn: null, pop: null, mode: null,
