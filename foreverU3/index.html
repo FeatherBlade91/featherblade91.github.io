@@ -27,10 +27,8 @@
   <nav class="mode-nav" id="modeNav">
     <button class="nav-pill active" data-mode="home">🏠 首页</button>
     <button class="nav-pill" data-mode="ring">🎡 3D 相册</button>
+    <button class="nav-pill" data-mode="galaxy">🌌 星河漫游</button>
     <button class="nav-pill" data-mode="slideshow">🎞 幻灯片</button>
-    <button class="nav-pill" data-mode="heart">💗 爱心墙</button>
-    <button class="nav-pill" data-mode="timeline">📖 时间轴</button>
-    <button class="nav-pill" data-mode="drift">🫧 泡泡漂流</button>
   </nav>
 
   <main id="app">
@@ -60,31 +58,34 @@
 
         <div class="timer-card glass">
           <div class="timer-label">我们已经在一起</div>
-          <div class="timer-grid" id="loveTimer">
-            <div class="timer-cell"><span class="timer-num" data-unit="days">0</span><span class="timer-unit">天</span></div>
-            <div class="timer-cell"><span class="timer-num" data-unit="hours">0</span><span class="timer-unit">时</span></div>
-            <div class="timer-cell"><span class="timer-num" data-unit="minutes">0</span><span class="timer-unit">分</span></div>
-            <div class="timer-cell"><span class="timer-num" data-unit="seconds">0</span><span class="timer-unit">秒</span></div>
-          </div>
-          <div class="milestone-tip" id="milestoneTip"></div>
+          <div class="timer-grid" id="loveTimer"></div>
+          <button class="timer-switch" id="timerSwitch" title="切换计时方式"></button>
         </div>
 
         <div class="hero-actions">
-          <button class="btn-primary" id="openLetter">💌 悄悄话</button>
           <button class="btn-ghost" data-goto="ring">开始逛相册 →</button>
         </div>
       </div>
+      <!-- 悄悄话入口故意做得不起眼：左下角一个淡淡的小信封 -->
+      <button id="openLetter" class="secret-letter" title="" aria-label="悄悄话">💌</button>
       <div class="scroll-hint">✦ 点击上方导航，切换不同的看照片姿势 ✦</div>
     </section>
 
     <!-- ===== 3D 旋转相册 ===== -->
     <section class="mode-page" id="page-ring">
       <h2 class="page-title">3D 旋转相册</h2>
-      <p class="page-desc">按住拖拽，让回忆转起来</p>
       <div class="ring-stage" id="ringStage">
         <div class="ring" id="ring"></div>
+        <div class="ring-floor"></div>
       </div>
-      <div class="ring-hint">🖱 拖拽旋转 · 点击照片放大</div>
+    </section>
+
+    <!-- ===== 星河漫游 ===== -->
+    <section class="mode-page" id="page-galaxy">
+      <div class="galaxy-stage" id="galaxyStage">
+        <div class="galaxy-space" id="galaxySpace"></div>
+        <div class="galaxy-vignette"></div>
+      </div>
     </section>
 
     <!-- ===== 幻灯片 ===== -->
@@ -92,7 +93,7 @@
       <div class="slide-box" id="slideBox">
         <div class="slide-layer" id="slideA"></div>
         <div class="slide-layer" id="slideB"></div>
-        <div class="slide-caption glass" id="slideCaption"></div>
+        <div class="slide-caption" id="slideCaption"></div>
         <div class="slide-controls">
           <button class="slide-btn" id="slidePrev">‹</button>
           <button class="slide-btn" id="slidePlay">⏸</button>
@@ -102,30 +103,7 @@
       </div>
     </section>
 
-    <!-- ===== 爱心照片墙 ===== -->
-    <section class="mode-page" id="page-heart">
-      <h2 class="page-title">爱心照片墙</h2>
-      <p class="page-desc">每一张照片，都是心动的一次跳动</p>
-      <div class="heart-wall" id="heartWall">
-        <div class="heart-core"></div>
-      </div>
-    </section>
-
-    <!-- ===== 时间轴 ===== -->
-    <section class="mode-page" id="page-timeline">
-      <h2 class="page-title">恋爱时间轴</h2>
-      <p class="page-desc">顺着时间，把故事再讲一遍</p>
-      <div class="timeline" id="timeline">
-        <div class="timeline-line"></div>
-      </div>
-    </section>
-
-    <!-- ===== 泡泡漂流 ===== -->
-    <section class="mode-page" id="page-drift">
-      <h2 class="page-title">泡泡漂流</h2>
-      <p class="page-desc">照片住进了泡泡里，戳开一个看看</p>
-      <div class="drift-field" id="driftField"></div>
-    </section>
+    <!-- 时间轴暂时下线：照片时间尚未标注，恢复时把下面的导航和本区块加回即可 -->
 
   </main>
 

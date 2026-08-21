@@ -13,6 +13,17 @@ const el = (tag, cls) => {
   return d;
 };
 const rand = (min, max) => min + Math.random() * (max - min);
+// 照片名称：优先标题，否则用文件名（去掉扩展名）
+const photoName = (p) =>
+  (p.caption || "").trim() ||
+  decodeURIComponent(p.src.split("/").pop() || "").replace(/\.[^.]+$/, "");
+// 列表场景用 thumbs/ 小图（由 tools/make_thumbs.py 生成），加载失败回退原图
+const thumbSrc = (p) => p.src.replace(/^photos\//, "thumbs/");
+function setThumb(img, p) {
+  img.decoding = "async";
+  img.onerror = () => { img.onerror = null; img.src = p.src; };
+  img.src = thumbSrc(p);
+}
 
 /* ---------- 数据加载 ---------- */
 async function loadPhotos() {
@@ -67,16 +78,19 @@ function initStarlight() {
   resize();
   addEventListener("resize", resize);
   (function tick() {
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    for (const st of stars) {
-      st.p += st.s;
-      const a = 0.25 + Math.abs(Math.sin(st.p)) * 0.55;
-      ctx.beginPath();
-      ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${st.c},${a})`;
-      ctx.shadowColor = `rgba(${st.c},0.9)`;
-      ctx.shadowBlur = 8;
-      ctx.fill();
+    // 画布被隐藏（如全屏模式下 display:none）时跳过绘制
+    if (cv.offsetParent !== null) {
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      for (const st of stars) {
+        st.p += st.s;
+        const a = 0.25 + Math.abs(Math.sin(st.p)) * 0.55;
+        ctx.beginPath();
+        ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${st.c},${a})`;
+        ctx.shadowColor = `rgba(${st.c},0.9)`;
+        ctx.shadowBlur = 8;
+        ctx.fill();
+      }
     }
     requestAnimationFrame(tick);
   })();
@@ -86,10 +100,16 @@ function initStarlight() {
 function switchMode(mode) {
   document.querySelectorAll(".mode-page").forEach((p) => p.classList.remove("active"));
   const page = $("#page-" + mode);
-  if (page) page.classList.add("active");
+  if (!page) return;
+  page.classList.add("active");
+  document.body.dataset.mode = mode;
   document.querySelectorAll(".nav-pill").forEach((n) => n.classList.toggle("active", n.dataset.mode === mode));
   if (mode === "slideshow") Slideshow.enter();
   else Slideshow.leave();
+  if (mode === "galaxy") Galaxy.enter();
+  else Galaxy.leave();
+  if (mode === "ring") Ring.enter();
+  history.replaceState(null, "", "#" + mode);
   window.scrollTo({ top: 0 });
 }
 
@@ -102,110 +122,1007 @@ function initNav() {
   );
 }
 
-/* ---------- 首页：计时器 + 纪念日 ---------- */
+/* ---------- 首页：恋爱计时器 ----------
+ * 两种显示方式：按总天数 / 按几年几月几周几天，可切换并记忆选择。
+ * 时间一律按北京时间（UTC+8）计算，不受本机时区影响。 */
 function initHome() {
   $("#heroSubtitle").textContent = SITE_CONFIG.subtitle || "";
-  const start = new Date(SITE_CONFIG.anniversaryDate + "T00:00:00");
-  const cells = {
-    days: $('[data-unit="days"]'),
-    hours: $('[data-unit="hours"]'),
-    minutes: $('[data-unit="minutes"]'),
-    seconds: $('[data-unit="seconds"]'),
-  };
-  function tick() {
-    let diff = Math.max(0, Date.now() - start.getTime());
-    const d = Math.floor(diff / 86400000);
-    const h = Math.floor((diff % 86400000) / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
-    cells.days.textContent = d;
-    cells.hours.textContent = String(h).padStart(2, "0");
-    cells.minutes.textContent = String(m).padStart(2, "0");
-    cells.seconds.textContent = String(s).padStart(2, "0");
+  const [sy, sm, sd] = SITE_CONFIG.anniversaryDate.split("-").map(Number);
+  // 把“现在”平移到北京时区：之后只用 UTC 方法读，就是北京时间的年月日时分秒
+  const beijingNow = () => new Date(Date.now() + 8 * 3600000);
+  const startUtc = Date.UTC(sy, sm - 1, sd); // 在一起当天 北京时间 00:00（在平移坐标系里）
+
+  const grid = $("#loveTimer");
+  const switchBtn = $("#timerSwitch");
+  let mode = localStorage.getItem("timerMode") || "days"; // days | calendar
+  let numEls = [];
+
+  // 日历差值：几年 + 几个月 + 几周 + 几天（都在平移后的北京坐标系里算）
+  function calendarParts(nowB) {
+    let y = nowB.getUTCFullYear() - sy;
+    let m = nowB.getUTCMonth() - (sm - 1);
+    let d = nowB.getUTCDate() - sd;
+    if (d < 0) {
+      m--;
+      const prevMonth = new Date(Date.UTC(nowB.getUTCFullYear(), nowB.getUTCMonth(), 0));
+      d += prevMonth.getUTCDate();
+    }
+    if (m < 0) { y--; m += 12; }
+    const w = Math.floor(d / 7);
+    return { y, m, w, d: d % 7 };
   }
+
+  function buildCells() {
+    const units = mode === "days"
+      ? ["天", "时", "分", "秒"]
+      : ["年", "个月", "周", "天", "时", "分", "秒"];
+    grid.classList.toggle("compact", units.length > 4);
+    grid.innerHTML = "";
+    numEls = units.map((u) => {
+      const cell = el("div", "timer-cell");
+      const num = el("span", "timer-num");
+      const unit = el("span", "timer-unit");
+      unit.textContent = u;
+      cell.appendChild(num);
+      cell.appendChild(unit);
+      grid.appendChild(cell);
+      return num;
+    });
+    switchBtn.textContent = mode === "days" ? "🗓 换成 几年几月几周几天" : "🗓 换成 总天数";
+  }
+
+  function tick() {
+    const nowB = beijingNow();
+    let diff = Math.max(0, nowB.getTime() - startUtc);
+    const h = Math.floor((diff % 86400000) / 3600000);
+    const mi = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    let vals;
+    if (mode === "days") {
+      vals = [Math.floor(diff / 86400000), h, mi, s];
+    } else {
+      const c = calendarParts(nowB);
+      vals = [c.y, c.m, c.w, c.d, h, mi, s];
+    }
+    vals.forEach((v, i) => {
+      numEls[i].textContent = mode === "days" && i > 0 ? String(v).padStart(2, "0") : v;
+    });
+  }
+
+  switchBtn.addEventListener("click", () => {
+    mode = mode === "days" ? "calendar" : "days";
+    localStorage.setItem("timerMode", mode);
+    buildCells();
+    tick();
+  });
+  buildCells();
   tick();
   setInterval(tick, 1000);
-
-  // 最近纪念日倒计时
-  const tip = $("#milestoneTip");
-  const now = new Date();
-  let best = null;
-  for (const ms of SITE_CONFIG.milestones || []) {
-    const [mm, dd] = ms.date.split("-").map(Number);
-    let next = new Date(now.getFullYear(), mm - 1, dd);
-    if (next < new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
-      next = new Date(now.getFullYear() + 1, mm - 1, dd);
-    }
-    const days = Math.round((next - now) / 86400000);
-    if (!best || days < best.days) best = { days, title: ms.title };
-  }
-  if (best) {
-    tip.textContent = best.days === 0
-      ? `🎉 今天就是「${best.title}」！`
-      : `距离「${best.title}」还有 ${best.days} 天 💕`;
-  }
 }
 
-/* ---------- 3D 旋转相册 ---------- */
+/* ---------- 3D 旋转相册（无限环） ----------
+ * 每张卡片保持照片的真实宽高比：横图就是横的、竖图就是竖的，一律不裁剪。
+ * 尺寸按「等面积」给：宽 = u·√比例、高 = u/√比例，于是 3:2 的横图和 2:3 的竖图
+ * 分量相当却形状分明，一眼就能看出两种规格；u 由舞台尺寸决定（见 unit()）。
+ * 间距不按等分角度，而是沿环按弧长逐个累加：每张卡占据「自身宽度 + GAP」，
+ * 因此无论横竖、多宽，相邻卡片之间永远保持同样的 GAP，不会重叠。
+ * 环总弧长 L = Σ(卡宽 + GAP)，半径 R = L / 2π；
+ * 相机位置 cam（弧长坐标）连续推进，飞到后半环的卡片被回收到
+ * 前进方向的最前端并换上新照片，因此拖动可以无限持续。
+ * 舞台的 perspective 不写死，而是按 R 反推（见 recompute），让最前排的卡片
+ * 稳定放大到 FRONT_ZOOM 倍——否则照片一多、环一大，前排就会糊到糊满屏幕。 */
 const Ring = {
-  angle: 0,
-  velocity: 0.12,
+  SLOTS: 30,        // 环上同时存在的卡片数
+  GAP: 28,          // 相邻卡片的间距（px，沿环的弧长测量）
+  FRONT_ZOOM: 1.3,  // 最前排卡片相对实际尺寸的放大倍数
+  DEFAULT_V: -2.4,  // 默认自转速度（px / 帧，负值 = 向前）
+  cam: 0,           // 相机位置（沿环的弧长 px，单调可正可负）
+  velocity: -2.4,
+  tilt: -6,
   dragging: false,
+  slots: [],        // { el, img, cap, photoIdx, w, h, s }  s = 中心弧长坐标
+  order: [],        // slots 下标，按环上的先后顺序（order[0] 在队尾方向）
+  base: 0,          // order[0] 起始边的绝对弧长坐标
+  radius: 0,
+  length: 1,        // 环的总弧长 L
   init() {
-    const ring = $("#ring");
-    const stage = $("#ringStage");
-    const n = Math.max(PHOTOS.length, 1);
-    const radius = Math.max(300, n * 52);
-    PHOTOS.forEach((p, i) => {
-      const card = el("div", "ring-card");
-      card.style.transform = `rotateY(${(360 / n) * i}deg) translateZ(${radius}px)`;
-      const img = el("img");
-      img.src = p.src;
-      img.alt = p.caption || "";
-      img.loading = "lazy";
-      card.appendChild(img);
-      const capText = `${p.date || ""} ${p.caption || ""}`.trim();
-      if (capText) {
-        const cap = el("div", "ring-caption");
-        cap.textContent = capText;
-        card.appendChild(cap);
-      }
-      card.addEventListener("click", () => {
-        if (!this.moved) Lightbox.open(i);
-      });
-      ring.appendChild(card);
-    });
+    this.ring = $("#ring");
+    this.stage = $("#ringStage");
+    const stage = this.stage;
+    this.build();
+    addEventListener("resize", () => this.layout());
 
-    let lastX = 0;
+    let lastX = 0, lastY = 0;
+    // 注意：不要用 setPointerCapture——它会把 click 重定向到 stage，
+    // 导致卡片上的点击放大永远触发不了
     stage.addEventListener("pointerdown", (e) => {
       this.dragging = true;
       this.moved = false;
       lastX = e.clientX;
-      stage.setPointerCapture(e.pointerId);
+      lastY = e.clientY;
     });
-    stage.addEventListener("pointermove", (e) => {
+    window.addEventListener("pointermove", (e) => {
       if (!this.dragging) return;
       const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
       lastX = e.clientX;
-      if (Math.abs(dx) > 2) this.moved = true;
-      this.velocity = dx * 0.15;
-      this.angle += dx * 0.25;
+      lastY = e.clientY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
+      this.velocity = dx * 2.4;
+      this.cam -= dx * 2.4;
+      this.tilt = Math.max(-24, Math.min(14, this.tilt - dy * 0.08));
     });
     const end = () => { this.dragging = false; };
-    stage.addEventListener("pointerup", end);
-    stage.addEventListener("pointercancel", end);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
 
     const loop = () => {
       if (!this.dragging) {
-        // 惯性衰减 + 默认缓慢自转
-        this.velocity += (0.12 - this.velocity) * 0.02;
-        this.angle += this.velocity;
+        // 惯性衰减 + 默认缓慢自转，视角缓慢回正
+        this.velocity += (this.DEFAULT_V - this.velocity) * 0.02;
+        this.cam -= this.velocity;
+        this.tilt += (-6 - this.tilt) * 0.02;
       }
-      ring.style.transform = `rotateY(${this.angle}deg)`;
+      // 环一倾斜，最前排就会往下掉 R·sin(tilt)（前排还要再乘放大倍数），
+      // 这里按同样的量抬回来，让最前排始终停在画面中间偏上
+      const lift = Math.sin((this.tilt * Math.PI) / 180) * this.radius * this.FRONT_ZOOM * 0.85;
+      this.ring.style.transform = `translateY(${lift.toFixed(1)}px) rotateX(${this.tilt}deg)`;
+      // 回收：队尾（order[0]）落到后半环就跳到最前端换照片，反向拖动时对称处理。
+      // 回收会改变总弧长，可能让另一端越界，因此成对反复检查直到两端都收敛
+      let moved = true, guard = 0;
+      const MAX_RECYCLE = this.SLOTS * 4;
+      while (moved && guard < MAX_RECYCLE) {
+        moved = false;
+        while (this.slots[this.order[0]].s - this.cam < -this.length / 2 && guard < MAX_RECYCLE) {
+          this.recycle(1); moved = true; guard++;
+        }
+        while (this.slots[this.order[this.order.length - 1]].s - this.cam >= this.length / 2 && guard < MAX_RECYCLE) {
+          this.recycle(-1); moved = true; guard++;
+        }
+      }
+      for (const s of this.slots) {
+        const deg = ((s.s - this.cam) / this.radius) * 180 / Math.PI;
+        s.el.style.transform = `rotateY(${deg}deg) translateZ(${this.radius}px)`;
+        // 正面亮、背面暗一点，增强立体感
+        const c = Math.cos((deg * Math.PI) / 180);
+        s.el.style.filter = `brightness(${(0.72 + 0.28 * Math.max(0, c)).toFixed(3)})`;
+      }
       requestAnimationFrame(loop);
     };
     loop();
   },
+  // 卡片的基准尺寸 u：横竖两种规格都以它为“面积边长”，跟着舞台大小走。
+  // 前排放大 FRONT_ZOOM 倍后，竖图（最高的那种）大约占舞台高度的一半。
+  unit() {
+    const w = (this.stage && this.stage.clientWidth) || innerWidth;
+    const h = (this.stage && this.stage.clientHeight) || innerHeight;
+    // 窄屏放宽横向占比，不然手机上照片小得看不清
+    return Math.max(96, Math.min(0.34 * h, (w < 640 ? 0.46 : 0.34) * w, 300));
+  },
+  build() {
+    if (!PHOTOS.length) return;
+    this.ring.innerHTML = "";
+    this.slots = [];
+    this.order = [];
+    this.base = 0;
+    const u = this.unit();
+    for (let i = 0; i < this.SLOTS; i++) {
+      const card = el("div", "ring-card");
+      const img = el("img");
+      img.loading = "lazy";
+      const cap = el("div", "ring-caption");
+      card.appendChild(img);
+      card.appendChild(cap);
+      // 先按 3:4 占位，图片加载完成后 fitCard 按真实宽高比重算
+      const s = { el: card, img, cap, photoIdx: i % PHOTOS.length, w: u * 0.87, h: u * 1.15, s: 0 };
+      card.style.width = s.w.toFixed(1) + "px";
+      card.style.height = s.h.toFixed(1) + "px";
+      card.style.left = (-s.w / 2).toFixed(1) + "px";
+      card.style.top = (-s.h / 2).toFixed(1) + "px";
+      card.addEventListener("click", () => {
+        if (!this.moved && s.photoIdx >= 0) Lightbox.open(s.photoIdx);
+      });
+      this.ring.appendChild(card);
+      this.slots.push(s);
+      this.order.push(i);
+      this.assign(s);
+    }
+    this.recompute();
+  },
+  // 按当前每张卡的实际宽度，沿环逐个累加弧长坐标和半径
+  recompute() {
+    let x = this.base;
+    for (const i of this.order) {
+      const s = this.slots[i];
+      s.s = x + s.w / 2;
+      x += s.w + this.GAP;
+    }
+    this.length = Math.max(x - this.base, 1);
+    this.radius = this.length / (2 * Math.PI);
+    // 由半径反推 perspective：最前排（z = +R）的放大倍数恒为 FRONT_ZOOM，
+    // 卡片再多、环再大也不会糊成满屏。P = R·Z/(Z-1)
+    if (this.stage) {
+      const p = (this.radius * this.FRONT_ZOOM) / (this.FRONT_ZOOM - 1);
+      this.stage.style.perspective = Math.round(p) + "px";
+    }
+  },
+  // dir = 1：队尾卡回收到最前端；dir = -1：队首卡回收到最后端
+  recycle(dir) {
+    const total = PHOTOS.length;
+    let i;
+    if (dir > 0) {
+      i = this.order.shift();
+      const s = this.slots[i];
+      this.base += s.w + this.GAP;
+      const prev = this.slots[this.order[this.order.length - 1]];
+      s.photoIdx = (prev.photoIdx + 1) % total;
+      this.order.push(i);
+    } else {
+      i = this.order.pop();
+      const s = this.slots[i];
+      this.base -= s.w + this.GAP;
+      const next = this.slots[this.order[0]];
+      s.photoIdx = ((next.photoIdx - 1) % total + total) % total;
+      this.order.unshift(i);
+    }
+    this.assign(this.slots[i]);
+    this.recompute();
+  },
+  layout() {
+    // 基础尺寸变化（如横竖屏切换）时，按已加载的真实宽高比全部重排
+    for (const s of this.slots) this.fitCard(s);
+    this.recompute();
+  },
+  // 页面藏着的时候 stage 量不到尺寸，进来时按真实舞台重排一次
+  enter() { this.layout(); },
+  assign(s) {
+    const p = PHOTOS[s.photoIdx];
+    s.img.alt = photoName(p);
+    // 图片加载完成后，按真实宽高比调整相框（横图横放、竖图竖放，不裁剪）
+    s.img.onload = () => this.fitCard(s);
+    setThumb(s.img, p);
+    s.cap.textContent = photoName(p);
+  },
+  fitCard(s) {
+    const nw = s.img.naturalWidth, nh = s.img.naturalHeight;
+    if (!nw || !nh) return;
+    const ar = nw / nh;
+    const u = this.unit();
+    // 等面积：宽 = u·√比例、高 = u/√比例。横图明显更宽、竖图明显更高，
+    // 但两者面积相当，转起来不会一会儿大一会儿小；极端宽幅全景另给上限。
+    const k = Math.sqrt(Math.min(Math.max(ar, 0.3), 3));
+    const w = Math.min(u * k, u * 1.8);
+    const h = w / ar;
+    s.w = w;
+    s.h = h;
+    s.el.style.width = w.toFixed(1) + "px";
+    s.el.style.height = h.toFixed(1) + "px";
+    // .ring 是 0×0 的锚点，卡片以它为中心摆
+    s.el.style.left = (-w / 2).toFixed(1) + "px";
+    s.el.style.top = (-h / 2).toFixed(1) + "px";
+    this.recompute();
+  },
+};
+
+/* ---------- 星河漫游的背景天体：土星 ----------
+ * 规格对齐 saturn.html：星幕球壳 + 程序化条纹贴图的扁球行星（赤道半径 20、
+ * 极扁率 0.89、转轴倾角 26.7°、自转 0.12）+ 分区粒子环（B 环 / 卡西尼缝 / A 环，
+ * 开普勒差速 ω ∝ r^-1.5，加法混合）+ 大气辉光，太阳光 / 环境光 / 边缘光三盏灯。
+ * saturn.html 用的是 three.js，这里按同一套参数用原生 WebGL 重写，保持整站零依赖；
+ * 粒子数按“背景层”的定位下调（环 6 万 → 4.6 万、星 8000 → 6000）。
+ * 只在首次进入星河漫游时初始化：页面隐藏时 clientWidth 为 0，提前建画布会得到 0×0。 */
+const SaturnSky = {
+  TILT: (26.7 * Math.PI) / 180, // 转轴倾角，行星与环共用
+  FLATTEN: 0.89,                // 扁率：土星两极明显压扁
+  RING_COUNT: 46000,
+  STAR_COUNT: 6000,
+  DIST: 215,                    // 相机到土星的距离
+  ready: false,
+
+  /* ===== 4×4 / 3×3 矩阵小工具（列主序，可直接喂给 WebGL） ===== */
+  // shiftX / shiftY：镜头平移，把土星推离画面正中（正中留给照片隧道）
+  perspective(fovy, aspect, near, far, shiftX, shiftY) {
+    const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+    return new Float32Array([
+      f / aspect, 0, 0, 0,
+      0, f, 0, 0,
+      -shiftX, -shiftY, (far + near) * nf, -1,
+      0, 0, 2 * far * near * nf, 0,
+    ]);
+  },
+  lookAt(eye, target) {
+    let zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
+    let l = Math.hypot(zx, zy, zz) || 1; zx /= l; zy /= l; zz /= l;
+    let xx = zz, xy = 0, xz = -zx;          // up = (0,1,0) 与 z 轴叉乘
+    l = Math.hypot(xx, xy, xz) || 1; xx /= l; xy /= l; xz /= l;
+    const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    return new Float32Array([
+      xx, yx, zx, 0,
+      xy, yy, zy, 0,
+      xz, yz, zz, 0,
+      -(xx * eye[0] + xy * eye[1] + xz * eye[2]),
+      -(yx * eye[0] + yy * eye[1] + yz * eye[2]),
+      -(zx * eye[0] + zy * eye[1] + zz * eye[2]), 1,
+    ]);
+  },
+  mul(a, b) {
+    const o = new Float32Array(16);
+    for (let c = 0; c < 4; c++)
+      for (let r = 0; r < 4; r++)
+        o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    return o;
+  },
+  rotY(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]); },
+  rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); },
+  scaleM(x, y, z) { return new Float32Array([x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]); },
+  mat3of(m) { return new Float32Array([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]); },
+
+  /* ===== 着色器 / 缓冲区的小封装 ===== */
+  makeProgram(vsrc, fsrc) {
+    const gl = this.gl;
+    const compile = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.warn("saturn shader:", gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
+    };
+    const v = compile(gl.VERTEX_SHADER, vsrc), f = compile(gl.FRAGMENT_SHADER, fsrc);
+    if (!v || !f) return null;
+    const p = gl.createProgram();
+    gl.attachShader(p, v);
+    gl.attachShader(p, f);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      console.warn("saturn link:", gl.getProgramInfoLog(p));
+      return null;
+    }
+    const o = { p, a: {}, u: {} };
+    for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_ATTRIBUTES); i < n; i++) {
+      const name = gl.getActiveAttrib(p, i).name;
+      o.a[name] = gl.getAttribLocation(p, name);
+    }
+    for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) {
+      const name = gl.getActiveUniform(p, i).name;
+      o.u[name] = gl.getUniformLocation(p, name);
+    }
+    return o;
+  },
+  buffer(data, target) {
+    const gl = this.gl;
+    const b = gl.createBuffer();
+    const t = target || gl.ARRAY_BUFFER;
+    gl.bindBuffer(t, b);
+    gl.bufferData(t, data, gl.STATIC_DRAW);
+    return b;
+  },
+  // 切换程序时先关掉所有顶点属性槽，再按 layout 打开需要的，避免残留的槽指向别的缓冲
+  use(prog, buf, layout, stride) {
+    const gl = this.gl;
+    gl.useProgram(prog.p);
+    for (let i = 0; i < this.maxAttribs; i++) gl.disableVertexAttribArray(i);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    for (const [name, size, offset] of layout) {
+      const loc = prog.a[name];
+      if (loc == null || loc < 0) continue;
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride * 4, offset * 4);
+    }
+  },
+
+  /* ===== 行星贴图：canvas 程序化生成（横向条纹 + 噪点） ===== */
+  buildTexture() {
+    const W = 1024, H = 512;
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+
+    const grad = ctx.createLinearGradient(0, 0, 0, H); // 两极 → 赤道
+    [[0, "#c8a86b"], [0.18, "#e2c07a"], [0.3, "#d4aa65"], [0.45, "#f0d08a"], [0.5, "#e8c870"],
+     [0.55, "#f0d08a"], [0.7, "#d4aa65"], [0.82, "#e2c07a"], [1, "#c8a86b"]]
+      .forEach(([at, c]) => grad.addColorStop(at, c));
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    const bands = [
+      { y: 0.12, w: 0.04, c: "rgba(160,110,50,0.35)" },
+      { y: 0.22, w: 0.025, c: "rgba(200,160,80,0.25)" },
+      { y: 0.32, w: 0.05, c: "rgba(140,90,40,0.40)" },
+      { y: 0.41, w: 0.03, c: "rgba(220,180,90,0.30)" },
+      { y: 0.50, w: 0.06, c: "rgba(130,85,35,0.45)" },
+      { y: 0.60, w: 0.03, c: "rgba(210,170,85,0.28)" },
+      { y: 0.68, w: 0.04, c: "rgba(150,100,45,0.38)" },
+      { y: 0.78, w: 0.03, c: "rgba(195,155,75,0.22)" },
+      { y: 0.88, w: 0.04, c: "rgba(160,110,50,0.30)" },
+    ];
+    for (const b of bands) {
+      const bg = ctx.createLinearGradient(0, (b.y - b.w / 2) * H, 0, (b.y + b.w / 2) * H);
+      bg.addColorStop(0, "transparent");
+      bg.addColorStop(0.5, b.c);
+      bg.addColorStop(1, "transparent");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, (b.y - b.w) * H, W, b.w * 2 * H);
+    }
+
+    const imgd = ctx.getImageData(0, 0, W, H);
+    const d = imgd.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const n = (Math.random() - 0.5) * 12;
+      d[i] = Math.min(255, Math.max(0, d[i] + n));
+      d[i + 1] = Math.min(255, Math.max(0, d[i + 1] + n * 0.9));
+      d[i + 2] = Math.min(255, Math.max(0, d[i + 2] + n * 0.6));
+    }
+    ctx.putImageData(imgd, 0, 0);
+    return cv;
+  },
+
+  /* ===== 几何体 ===== */
+  buildSphere(r, segW, segH) {
+    const v = [], idx = [];
+    for (let y = 0; y <= segH; y++) {
+      const phi = (y / segH) * Math.PI;
+      for (let x = 0; x <= segW; x++) {
+        const theta = (x / segW) * Math.PI * 2;
+        const nx = -Math.sin(phi) * Math.cos(theta);
+        const ny = Math.cos(phi);
+        const nz = Math.sin(phi) * Math.sin(theta);
+        v.push(nx * r, ny * r, nz * r, nx, ny, nz, x / segW, y / segH);
+      }
+    }
+    for (let y = 0; y < segH; y++) {
+      for (let x = 0; x < segW; x++) {
+        const a = y * (segW + 1) + x, b = a + segW + 1;
+        if (y !== 0) idx.push(a, b, a + 1);
+        if (y !== segH - 1) idx.push(b, b + 1, a + 1);
+      }
+    }
+    return { data: new Float32Array(v), index: new Uint16Array(idx) };
+  },
+  // 环：按密度分区抽样，同 saturn.html 的 B 环 / 卡西尼缝 / A 环结构
+  buildRings(count) {
+    const zones = [
+      { rMin: 24, rMax: 30, density: 0.20 },
+      { rMin: 30, rMax: 38, density: 1.00 },
+      { rMin: 38, rMax: 40, density: 0.10 }, // 卡西尼缝
+      { rMin: 40, rMax: 52, density: 0.85 },
+      { rMin: 52, rMax: 58, density: 0.40 },
+    ];
+    const total = zones.reduce((s, z) => s + z.density * (z.rMax - z.rMin), 0);
+    const REF_R = 37, REF_W = 0.018; // 开普勒归一化：ω ∝ r^(-3/2)
+    const d = new Float32Array(count * 6); // angle speed radius y size alpha
+    for (let i = 0; i < count; i++) {
+      let pick = Math.random() * total, zone = zones[0];
+      for (const z of zones) {
+        pick -= z.density * (z.rMax - z.rMin);
+        if (pick <= 0) { zone = z; break; }
+      }
+      const r = zone.rMin + Math.random() * (zone.rMax - zone.rMin);
+      const edgeFade = Math.min((r - zone.rMin) / 2, (zone.rMax - r) / 2);
+      const o = i * 6;
+      d[o] = Math.random() * Math.PI * 2;
+      d[o + 1] = REF_W * Math.pow(REF_R / r, 1.5);
+      d[o + 2] = r + (Math.random() - 0.5) * 0.4;          // 半径噪声
+      d[o + 3] = (Math.random() - 0.5) * 0.35;             // 环极薄，只有一点厚度
+      d[o + 4] = 0.6 + Math.random() * Math.random() * 2.2;
+      d[o + 5] = Math.min(1, zone.density * 0.85 * Math.min(1, edgeFade)) * (0.4 + Math.random() * 0.6);
+    }
+    return d;
+  },
+  buildStars(count) {
+    const d = new Float32Array(count * 4);
+    for (let i = 0; i < count; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const r = 800 + Math.random() * 400;
+      const o = i * 4;
+      d[o] = r * Math.sin(phi) * Math.cos(theta);
+      d[o + 1] = r * Math.sin(phi) * Math.sin(theta);
+      d[o + 2] = r * Math.cos(phi);
+      d[o + 3] = Math.random() * 1.8 + 0.4;
+    }
+    return d;
+  },
+
+  init(stage) {
+    const cv = el("canvas");
+    cv.id = "galaxyGL";
+    cv.setAttribute("aria-hidden", "true");
+    stage.insertBefore(cv, stage.firstChild);
+    const gl = cv.getContext("webgl", { alpha: true, antialias: false, depth: true });
+    if (!gl) { cv.remove(); return false; } // 不支持 WebGL：留 CSS 深空渐变兜底
+    this.gl = gl; this.cv = cv; this.stage = stage;
+    this.maxAttribs = gl.getParameter(gl.MAX_VERTEX_ATTRIBS);
+
+    const COMMON = `
+      uniform mat4 uProj;
+      uniform mat4 uView;
+      uniform mat4 uModel;`;
+
+    this.starProg = this.makeProgram(
+      `attribute vec3 aPos;
+       attribute float aSize;
+       uniform mat4 uProj;
+       uniform mat4 uView;
+       uniform float uScale;
+       void main() {
+         vec4 mv = uView * vec4(aPos, 1.0);
+         gl_PointSize = max(1.0, aSize * (uScale / -mv.z));
+         gl_Position = uProj * mv;
+       }`,
+      `precision mediump float;
+       void main() {
+         float d = length(gl_PointCoord - 0.5);
+         if (d > 0.5) discard;
+         float a = 1.0 - smoothstep(0.2, 0.5, d);
+         gl_FragColor = vec4(1.0, 1.0, 1.0, a * 0.85);
+       }`);
+
+    this.planetProg = this.makeProgram(
+      `attribute vec3 aPos;
+       attribute vec3 aNor;
+       attribute vec2 aUv;
+       ${COMMON}
+       uniform mat3 uNormalMat;
+       varying vec3 vNor;
+       varying vec3 vWorld;
+       varying vec2 vUv;
+       void main() {
+         vec4 world = uModel * vec4(aPos, 1.0);
+         vWorld = world.xyz;
+         vNor = uNormalMat * aNor;
+         vUv = aUv;
+         gl_Position = uProj * (uView * world);
+       }`,
+      `precision mediump float;
+       uniform sampler2D uTex;
+       uniform vec3 uEye;
+       uniform float uExposure;
+       varying vec3 vNor;
+       varying vec3 vWorld;
+       varying vec2 vUv;
+       void main() {
+         vec3 N = normalize(vNor);
+         vec3 base = texture2D(uTex, vUv).rgb;
+         vec3 L = normalize(vec3(300.0, 80.0, 200.0));   // 太阳 0xfff5e0 强度 2.2
+         float diff = max(dot(N, L), 0.0);
+         vec3 col = base * vec3(1.0, 0.961, 0.878) * diff * 2.2;
+         col += base * vec3(0.067, 0.133, 0.267) * 0.6;  // 环境光 0x112244
+         vec3 R = normalize(vec3(-200.0, -40.0, -100.0)); // 边缘光 0x4466aa 强度 0.4
+         col += base * vec3(0.267, 0.4, 0.667) * max(dot(N, R), 0.0) * 0.4;
+         vec3 H = normalize(L + normalize(uEye - vWorld)); // 高光 shininess 18
+         col += vec3(0.15, 0.12, 0.06) * pow(max(dot(N, H), 0.0), 18.0) * step(0.001, diff);
+         gl_FragColor = vec4(col * uExposure, 1.0);
+       }`);
+
+    this.ringProg = this.makeProgram(
+      `attribute float aAngle;
+       attribute float aSpeed;
+       attribute float aRadius;
+       attribute float aY;
+       attribute float aSize;
+       attribute float aAlpha;
+       ${COMMON}
+       uniform float uTime;
+       uniform float uScale;
+       varying float vAlpha;
+       void main() {
+         float angle = aAngle + aSpeed * uTime;   // 内圈快、外圈慢
+         vec4 mv = uView * (uModel * vec4(aRadius * cos(angle), aY, aRadius * sin(angle), 1.0));
+         gl_PointSize = max(1.0, aSize * (uScale / -mv.z));
+         gl_Position = uProj * mv;
+         vAlpha = aAlpha;
+       }`,
+      `precision mediump float;
+       uniform vec3 uColor;
+       varying float vAlpha;
+       void main() {
+         float d = length(gl_PointCoord - 0.5);
+         if (d > 0.5) discard;
+         float soft = 1.0 - smoothstep(0.15, 0.5, d);
+         gl_FragColor = vec4(uColor, soft * vAlpha);
+       }`);
+
+    this.haloProg = this.makeProgram(
+      `attribute vec2 aQuad;
+       uniform mat4 uProj;
+       uniform mat4 uView;
+       uniform vec2 uSize;
+       varying vec2 vQ;
+       void main() {
+         vec3 c = (uView * vec4(0.0, 0.0, 0.0, 1.0)).xyz; // 土星中心，正对镜头
+         vQ = aQuad;
+         gl_Position = uProj * vec4(c + vec3(aQuad * uSize, 0.0), 1.0);
+       }`,
+      `precision mediump float;
+       varying vec2 vQ;
+       void main() {
+         float d = length(vQ);
+         if (d > 1.0 || d < 0.469) discard;   // 内圈半径 60/128，贴着行星边缘起晕
+         float t = (d - 0.469) / 0.531;
+         vec3 c; float a;
+         if (t < 0.5) { c = mix(vec3(0.86,0.75,0.47), vec3(0.78,0.63,0.31), t / 0.5); a = mix(0.0, 0.08, t / 0.5); }
+         else if (t < 0.8) { c = mix(vec3(0.78,0.63,0.31), vec3(0.71,0.55,0.24), (t-0.5)/0.3); a = mix(0.08, 0.15, (t-0.5)/0.3); }
+         else { c = mix(vec3(0.71,0.55,0.24), vec3(0.63,0.47,0.20), (t-0.8)/0.2); a = mix(0.15, 0.0, (t-0.8)/0.2); }
+         gl_FragColor = vec4(c, a);
+       }`);
+
+    if (!this.starProg || !this.planetProg || !this.ringProg || !this.haloProg) {
+      cv.remove(); this.gl = null; return false;
+    }
+
+    const sphere = this.buildSphere(20, 64, 48);
+    this.sphereBuf = this.buffer(sphere.data);
+    this.sphereIdx = this.buffer(sphere.index, gl.ELEMENT_ARRAY_BUFFER);
+    this.sphereCount = sphere.index.length;
+    this.ringBuf = this.buffer(this.buildRings(this.RING_COUNT));
+    this.starBuf = this.buffer(this.buildStars(this.STAR_COUNT));
+    this.haloBuf = this.buffer(new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
+
+    this.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.buildTexture());
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    gl.clearColor(0, 0, 0, 0);
+    this.resize();
+    addEventListener("resize", () => this.resize());
+    this.ready = true;
+    return true;
+  },
+
+  resize() {
+    if (!this.gl) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const w = this.stage.clientWidth || window.innerWidth;
+    const h = this.stage.clientHeight || window.innerHeight;
+    this.cv.width = Math.max(1, Math.round(w * dpr));
+    this.cv.height = Math.max(1, Math.round(h * dpr));
+  },
+
+  /* 每帧渲染。lookX / lookY 是拖拽视角（度），叠加在缓慢自转的公转机位上 */
+  render(t, lookX, lookY) {
+    const gl = this.gl;
+    if (!gl || !this.ready) return;
+    const W = this.cv.width, H = this.cv.height;
+    gl.viewport(0, 0, W, H);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // 机位：绕土星缓慢转圈（对应 OrbitControls 的 autoRotate），拖拽时叠加偏移
+    const az = t * 0.018 + lookX * 0.012; // 约 350 秒转一圈，跟 saturn.html 的 autoRotate 同量级
+    const elev = Math.max(0.06, Math.min(0.9, 0.36 + lookY * 0.008));
+    const aspect = W / H;
+    const wide = aspect > 1.1;
+    const d = this.DIST * (wide ? 1 : 1.5); // 竖屏视野窄，退远一点免得土星占满整块屏
+    const eye = [
+      Math.sin(az) * Math.cos(elev) * d,
+      Math.sin(elev) * d,
+      Math.cos(az) * Math.cos(elev) * d,
+    ];
+    const proj = this.perspective(Math.PI / 4, aspect, 1, 4000, wide ? -0.38 : -0.1, wide ? 0.2 : 0.36);
+    const view = this.lookAt(eye, [0, 0, 0]);
+    const pxScale = H / 900; // 点的大小跟分辨率走，换屏幕不会忽大忽小
+
+    // 行星：倾角 → 自转 → 压扁；法线要用逆转置，压扁的方向反过来除
+    const spin = this.rotY(t * 0.12);
+    const tilt = this.rotZ(this.TILT);
+    const planetModel = this.mul(tilt, this.mul(spin, this.scaleM(1, this.FLATTEN, 1)));
+    const normalMat = this.mat3of(this.mul(tilt, this.mul(spin, this.scaleM(1, 1 / this.FLATTEN, 1))));
+
+    /* --- 星幕（先画，不写深度） --- */
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
+    this.use(this.starProg, this.starBuf, [["aPos", 3, 0], ["aSize", 1, 3]], 4);
+    gl.uniformMatrix4fv(this.starProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.starProg.u.uView, false, view);
+    gl.uniform1f(this.starProg.u.uScale, 300 * pxScale);
+    gl.drawArrays(gl.POINTS, 0, this.STAR_COUNT);
+
+    /* --- 行星本体（不透明，写深度，好让环从它背后穿过去） --- */
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    this.use(this.planetProg, this.sphereBuf, [["aPos", 3, 0], ["aNor", 3, 3], ["aUv", 2, 6]], 8);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.sphereIdx);
+    gl.uniformMatrix4fv(this.planetProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.planetProg.u.uView, false, view);
+    gl.uniformMatrix4fv(this.planetProg.u.uModel, false, planetModel);
+    gl.uniformMatrix3fv(this.planetProg.u.uNormalMat, false, normalMat);
+    gl.uniform3fv(this.planetProg.u.uEye, eye);
+    gl.uniform1f(this.planetProg.u.uExposure, 0.82); // 背景层，压一点曝光免得抢照片
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.uniform1i(this.planetProg.u.uTex, 0);
+    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_SHORT, 0);
+
+    /* --- 光环（加法混合，测深度但不写深度） --- */
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
+    this.use(this.ringProg, this.ringBuf, [
+      ["aAngle", 1, 0], ["aSpeed", 1, 1], ["aRadius", 1, 2],
+      ["aY", 1, 3], ["aSize", 1, 4], ["aAlpha", 1, 5],
+    ], 6);
+    gl.uniformMatrix4fv(this.ringProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.ringProg.u.uView, false, view);
+    gl.uniformMatrix4fv(this.ringProg.u.uModel, false, tilt);
+    gl.uniform1f(this.ringProg.u.uTime, t);
+    gl.uniform1f(this.ringProg.u.uScale, 380 * pxScale);
+    gl.uniform3f(this.ringProg.u.uColor, 0.88, 0.8, 0.62);
+    gl.drawArrays(gl.POINTS, 0, this.RING_COUNT);
+
+    /* --- 大气辉光 --- */
+    this.use(this.haloProg, this.haloBuf, [["aQuad", 2, 0]], 2);
+    gl.uniformMatrix4fv(this.haloProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.haloProg.u.uView, false, view);
+    gl.uniform2f(this.haloProg.u.uSize, 26, 23);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  },
+};
+
+/* ---------- 星河漫游 ----------
+ * 照片散落在一条 3D 隧道里，相机匀速向前穿梭；
+ * 隧道里同一时刻只保留少量照片槽位，飞过身后的槽位回收并
+ * 换成未出场的照片，循环展示全集，控制内存与渲染开销。
+ * 背景层：远处一颗 WebGL 土星（SaturnSky）+ canvas 星幕（深度视差 + 闪烁）+ 流星雨。 */
+const Galaxy = {
+  DEPTH: 7000,         // 隧道总长（px）
+  VISIBLE_DEPTH: 4600, // 超过这个深度的照片隐藏且不加载，控制内存和流量
+  PERSPECTIVE: 900,    // 与 .galaxy-stage 的 perspective 保持一致
+  // 单次渲染的照片数：同屏越少越流畅（原来 36 张，掉帧明显），小屏再少一些
+  SLOTS: innerWidth < 768 ? 10 : 18,
+  cam: 0,
+  speed: 2.4,
+  speedBoost: 0,
+  lookX: 0,
+  lookY: 0,
+  items: [], // 照片槽位 { el, img, src, full, x, y, z, photoIdx, visible, loaded }
+  stars: [], // 星幕粒子
+  nextPhoto: 0,
+  nextShoot: 0,
+  running: false,
+  init() {
+    this.stage = $("#galaxyStage");
+    this.space = $("#galaxySpace");
+    const total = PHOTOS.length;
+    const slotCount = Math.min(this.SLOTS, total);
+    for (let s = 0; s < slotCount; s++) {
+      const it = {
+        el: el("div", "galaxy-photo"),
+        img: el("img"),
+        photoIdx: s,
+        x: rand(-46, 46),          // vw
+        y: rand(-38, 38),          // vh
+        z: rand(400, this.DEPTH),  // 距离相机的深度
+        visible: false,
+        loaded: false,
+      };
+      const p = PHOTOS[s];
+      it.el.style.visibility = "hidden";
+      it.img.alt = photoName(p);
+      it.img.decoding = "async";
+      // 图片加载完成后，按真实宽高比调整相框（横图横放、竖图竖放，不裁剪）
+      it.img.onload = () => {
+        const nw = it.img.naturalWidth, nh = it.img.naturalHeight;
+        if (!nw || !nh) return;
+        it.el.style.aspectRatio = nw + " / " + nh;
+        // 横图放宽宽度，不然长边被压得太小
+        if (nw > nh) it.el.style.width = "clamp(170px, 24vw, 320px)";
+      };
+      it.src = thumbSrc(p);
+      it.full = p.src;
+      it.el.appendChild(it.img);
+      it.el.addEventListener("click", () => {
+        if (!this.moved) Lightbox.open(it.photoIdx);
+      });
+      this.space.appendChild(it.el);
+      this.place(it);
+      this.items.push(it);
+    }
+    this.nextPhoto = slotCount;
+
+    // 背景星幕（土星那层等首次进入时再建，见 enter）
+    this.initStarfield();
+
+    // 拖拽环顾四周（不用 setPointerCapture，否则会抢走照片上的 click）
+    let lastX = 0, lastY = 0, dragging = false;
+    this.stage.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      this.moved = false;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
+      this.lookX = Math.max(-32, Math.min(32, this.lookX + dx * 0.06));
+      this.lookY = Math.max(-24, Math.min(24, this.lookY - dy * 0.06));
+    });
+    const end = () => { dragging = false; };
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    // 滚轮加速 / 减速穿梭
+    this.stage.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      this.speedBoost = Math.max(-2, Math.min(14, this.speedBoost - e.deltaY * 0.01));
+    }, { passive: false });
+
+    const loop = () => {
+      if (this.running) {
+        this.speedBoost *= 0.97; // 加速效果衰减
+        this.cam += Math.max(0.4, this.speed + this.speedBoost);
+        this.lookX *= 0.995;
+        this.lookY *= 0.995;
+        this.space.style.transform =
+          `rotateY(${this.lookX}deg) rotateX(${this.lookY}deg) translateZ(${this.cam}px)`;
+        for (const it of this.items) {
+          const rel = it.z - this.cam;
+          if (rel < -300) {
+            // 飞到相机身后：回收送到隧道尽头，并换成下一张未出场的照片
+            it.z += this.DEPTH;
+            it.photoIdx = this.nextPhoto % PHOTOS.length;
+            this.nextPhoto++;
+            const p = PHOTOS[it.photoIdx];
+            it.img.alt = photoName(p);
+            it.src = thumbSrc(p);
+            it.full = p.src;
+            it.loaded = false;
+            // 清掉上一张照片的宽高比样式，等新图加载后重新计算
+            it.el.style.width = "";
+            it.el.style.aspectRatio = "";
+            this.place(it);
+            it.visible = false;
+            it.el.style.visibility = "hidden";
+            it.el.style.opacity = "0";
+            continue;
+          }
+          const vis = rel < this.VISIBLE_DEPTH;
+          if (vis !== it.visible) {
+            it.visible = vis;
+            it.el.style.visibility = vis ? "" : "hidden";
+            it.el.style.opacity = vis ? "1" : "0"; // 远处淡入，不硬闪出来
+            // 进入可视深度才开始加载，避免一次性拉全部原图
+            if (vis && !it.loaded) {
+              it.loaded = true;
+              it.img.onerror = () => { it.img.onerror = null; it.img.src = it.full; };
+              it.img.src = it.src;
+            }
+          }
+        }
+        this.drawStars();
+        SaturnSky.render(performance.now() / 1000, this.lookX, this.lookY);
+        this.maybeShoot();
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  },
+  place(it) {
+    it.el.style.transform =
+      `translate(-50%, -50%) translate3d(${it.x}vw, ${it.y}vh, ${-it.z}px)`;
+  },
+
+  /* ----- 背景：星幕 canvas -----
+   * 星星分布在隧道圆柱空间里，每帧按相机深度做透视投影，
+   * 飞过身后的回收送到尽头，带闪烁与少量十字星芒。 */
+  initStarfield() {
+    const cv = el("canvas");
+    cv.id = "galaxyStars";
+    cv.setAttribute("aria-hidden", "true");
+    this.stage.insertBefore(cv, this.space);
+    this.starCv = cv;
+    this.starCtx = cv.getContext("2d");
+    this.stars = [];
+    addEventListener("resize", () => this.resizeStars());
+  },
+  /* 画布尺寸只能在星河漫游显示出来之后量：页面藏着时 clientWidth 是 0，
+   * 那样建出来的画布是 0×0，背景会整个消失。所以每次进入都重新量一次。 */
+  resizeStars() {
+    const cv = this.starCv;
+    if (!cv) return;
+    const w = this.stage.clientWidth || innerWidth;
+    const h = this.stage.clientHeight || innerHeight;
+    if (cv.width === w && cv.height === h && this.stars.length) return;
+    cv.width = w;
+    cv.height = h;
+    const STAR_COLORS = ["#ffffff", "#ffffff", "#ffffff", "#aedcff", "#ffc6de", "#d9ccff"];
+    const N = w < 768 ? 150 : 320;
+    this.stars = Array.from({ length: N }, () => ({
+      dx: rand(-1, 1) * w * 0.85,  // 单位深度处的方向偏移（px）
+      dy: rand(-1, 1) * h * 0.85,
+      z: rand(80, this.DEPTH),
+      r: rand(0.5, 1.7),
+      tw: rand(0.6, 2.2),          // 闪烁频率
+      ph: rand(0, Math.PI * 2),    // 闪烁相位
+      c: STAR_COLORS[(Math.random() * STAR_COLORS.length) | 0],
+      bright: Math.random() < 0.08, // 少量亮星画星芒
+    }));
+  },
+  drawStars() {
+    const g = this.starCtx;
+    if (!g) return;
+    const cv = this.starCv;
+    const W = cv.width, H = cv.height;
+    const cx = W / 2, cy = H / 2, P = this.PERSPECTIVE;
+    const t = performance.now() / 1000;
+    // 拖拽环顾时星幕也跟着轻微视差
+    const ox = Math.tan((this.lookX * Math.PI) / 180) * P;
+    const oy = Math.tan((this.lookY * Math.PI) / 180) * P;
+    g.clearRect(0, 0, W, H);
+    for (const s of this.stars) {
+      let rel = s.z - this.cam;
+      if (rel < 60) { s.z += this.DEPTH; rel = s.z - this.cam; }
+      const sc = P / rel;
+      const x = cx + (s.dx - ox) * sc;
+      const y = cy + (s.dy - oy) * sc;
+      if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
+      const a = (0.38 + 0.62 * Math.abs(Math.sin(t * s.tw + s.ph))) * Math.min(1, sc * 1.4);
+      const r = Math.min(3, s.r * sc);
+      g.globalAlpha = a;
+      g.fillStyle = s.c;
+      g.beginPath();
+      g.arc(x, y, r, 0, 6.2832);
+      g.fill();
+      if (s.bright && sc > 0.35) {
+        // 亮星的十字星芒
+        const L = r * 4;
+        g.globalAlpha = a * 0.55;
+        g.fillRect(x - L, y - 0.5, L * 2, 1);
+        g.fillRect(x - 0.5, y - L, 1, L * 2);
+      }
+    }
+    g.globalAlpha = 1;
+  },
+
+  /* ----- 背景：流星雨（时常成双成对地划过） ----- */
+  maybeShoot() {
+    const now = performance.now();
+    if (now < this.nextShoot) return;
+    this.nextShoot = now + rand(2800, 7000);
+    this.shootOne();
+    if (Math.random() < 0.35) {
+      setTimeout(() => { if (this.running) this.shootOne(); }, rand(300, 900));
+    }
+  },
+  shootOne() {
+    const s = el("div", "shooting-star");
+    // 朝左下或右下坠落
+    const ang = Math.random() < 0.5 ? rand(20, 65) : rand(115, 160);
+    const dist = rand(320, 620);
+    const rad = (ang * Math.PI) / 180;
+    s.style.setProperty("--ang", ang + "deg");
+    s.style.setProperty("--dx", Math.cos(rad) * dist + "px");
+    s.style.setProperty("--dy", Math.sin(rad) * dist + "px");
+    s.style.left = rand(10, 90) + "%";
+    s.style.top = rand(4, 45) + "%";
+    s.addEventListener("animationend", () => s.remove());
+    this.stage.appendChild(s);
+  },
+
+  enter() {
+    // 背景两层都要等页面真正显示出来才量得到尺寸，所以放在这里初始化 / 重量
+    this.resizeStars();
+    if (!this.skyTried) {
+      this.skyTried = true;
+      SaturnSky.init(this.stage);
+    } else {
+      SaturnSky.resize();
+    }
+    this.running = true;
+  },
+  leave() { this.running = false; },
 };
 
 /* ---------- 幻灯片 ---------- */
@@ -219,17 +1136,32 @@ const Slideshow = {
     this.b = $("#slideB");
     this.front = this.a;
     const dots = $("#slideDots");
-    PHOTOS.forEach((_, i) => {
-      const d = el("span", "slide-dot");
-      d.addEventListener("click", () => this.go(i));
-      dots.appendChild(d);
-    });
+    // 照片太多时点指示器会溢出，直接隐藏
+    if (PHOTOS.length <= 40) {
+      PHOTOS.forEach((_, i) => {
+        const d = el("span", "slide-dot");
+        d.addEventListener("click", () => this.go(i));
+        dots.appendChild(d);
+      });
+    } else {
+      dots.style.display = "none";
+    }
     $("#slidePrev").addEventListener("click", () => this.go(this.idx - 1));
     $("#slideNext").addEventListener("click", () => this.go(this.idx + 1));
     $("#slidePlay").addEventListener("click", () => {
       this.playing = !this.playing;
       $("#slidePlay").textContent = this.playing ? "⏸" : "▶";
       if (this.playing) this.auto();
+    });
+    // 触屏左右滑动切换
+    let touchX = null;
+    const box = $("#slideBox");
+    box.addEventListener("pointerdown", (e) => { touchX = e.clientX; });
+    box.addEventListener("pointerup", (e) => {
+      if (touchX === null) return;
+      const dx = e.clientX - touchX;
+      touchX = null;
+      if (Math.abs(dx) > 48) this.go(this.idx + (dx < 0 ? 1 : -1));
     });
   },
   enter() {
@@ -252,9 +1184,9 @@ const Slideshow = {
     back.classList.add("show");
     this.front.classList.remove("show");
     this.front = back;
-    const capText = `${p.date || ""} ${p.caption || ""}`.trim();
-    $("#slideCaption").textContent = capText;
-    $("#slideCaption").style.display = capText ? "" : "none";
+    const name = photoName(p);
+    $("#slideCaption").textContent = name;
+    $("#slideCaption").style.display = name ? "" : "none";
     document.querySelectorAll(".slide-dot").forEach((d, j) => d.classList.toggle("active", j === this.idx));
     if (this.playing) this.auto();
   },
@@ -264,34 +1196,7 @@ const Slideshow = {
   },
 };
 
-/* ---------- 爱心照片墙 ---------- */
-function buildHeartWall() {
-  const wall = $("#heartWall");
-  const n = PHOTOS.length;
-  if (!n) return;
-  // 心形参数方程
-  const heart = (t) => ({
-    x: 16 * Math.pow(Math.sin(t), 3),
-    y: 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t),
-  });
-  PHOTOS.forEach((p, i) => {
-    const t = (Math.PI * 2 * i) / n;
-    const pt = heart(t);
-    const d = el("div", "heart-photo");
-    d.style.left = 50 + (pt.x / 17) * 46 + "%";
-    d.style.top = 50 - (pt.y / 17) * 44 + "%";
-    d.style.animationDelay = rand(-5, 0) + "s";
-    const img = el("img");
-    img.src = p.src;
-    img.alt = p.caption || "";
-    img.loading = "lazy";
-    d.appendChild(img);
-    d.addEventListener("click", () => Lightbox.open(i));
-    wall.appendChild(d);
-  });
-}
-
-/* ---------- 时间轴 ---------- */
+/* ---------- 时间轴（暂时下线：照片时间尚未标注，代码保留以便恢复） ---------- */
 function buildTimeline() {
   const tl = $("#timeline");
   if (!PHOTOS.length) {
@@ -340,37 +1245,6 @@ function buildTimeline() {
   document.querySelectorAll(".tl-item").forEach((d) => io.observe(d));
 }
 
-/* ---------- 泡泡漂流 ---------- */
-function buildDrift() {
-  const field = $("#driftField");
-  const n = PHOTOS.length;
-  if (!n) return;
-  PHOTOS.forEach((p, i) => {
-    const b = el("button", "drift-bubble");
-    const size = rand(96, 170);
-    b.style.width = b.style.height = size + "px";
-    b.style.left = rand(3, 88) + "%";
-    b.style.top = rand(4, 80) + "%";
-    b.style.setProperty("--fdur", rand(6, 12) + "s");
-    b.style.setProperty("--fdelay", rand(-10, 0) + "s");
-    b.style.setProperty("--fx", rand(-26, 26) + "px");
-    b.style.setProperty("--fy", rand(-26, 26) + "px");
-    const img = el("img");
-    img.src = p.src;
-    img.alt = p.caption || "";
-    img.loading = "lazy";
-    b.appendChild(img);
-    b.addEventListener("click", () => {
-      b.classList.add("drift-pop");
-      setTimeout(() => {
-        Lightbox.open(i);
-        setTimeout(() => b.classList.remove("drift-pop"), 400);
-      }, 380);
-    });
-    field.appendChild(b);
-  });
-}
-
 /* ---------- 灯箱 ---------- */
 const Lightbox = {
   idx: 0,
@@ -398,7 +1272,8 @@ const Lightbox = {
   render() {
     const p = PHOTOS[this.idx];
     $("#lbImg").src = p.src;
-    $("#lbCaption").textContent = `${p.date || ""} ${p.caption || ""}`.trim();
+    $("#lbImg").alt = photoName(p);
+    $("#lbCaption").textContent = photoName(p);
   },
 };
 
@@ -475,7 +1350,8 @@ function initMusic() {
   Lightbox.init();
   Slideshow.init();
   Ring.init();
-  buildHeartWall();
-  buildTimeline();
-  buildDrift();
+  Galaxy.init();
+  // buildTimeline(); // 时间轴暂时下线：照片时间尚未标注
+  // 支持 #ring / #galaxy / #slideshow 直达
+  if (location.hash) switchMode(location.hash.slice(1));
 })();
