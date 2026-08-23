@@ -28,27 +28,27 @@ function setThumb(img, p) {
 /* ---------- 场景拖拽 / 单击判定（3D 相册与星河漫游共用） ----------
  * 统一的「拖动场景」手势：pointerdown 记下起点，window 级 pointermove
  * 把每次增量回调给 onDrag(dx, dy)；从起点累计位移超过 CLICK_SLACK 才算
- * 「拖过」。可选的 onTap 会记住按下时的元素，在随后 click 到达舞台时
- * 优先处理单击；这能覆盖元素自身发生位移、导致 click 落到舞台的场景，
- * 又避免在 pointerup 阶段过早插入弹层、让紧随其后的 click 被弹层接走。
+ * 「拖过」。dragButton 默认 0（左键）；星河传 1，改用按住滚轮拖拽，
+ * 从输入层彻底避免与左键查看照片冲突。
  * 想看大图的模式统一在单击里调 Lightbox.open()——
  * 大图呈现全站只有灯箱这一套，别另写。
  * 注意：不要用 setPointerCapture，它会把 click 重定向到舞台元素，
  * 照片卡片上的单击就收不到了。 */
-function makeSceneDrag(stage, onDrag, onTap) {
+function makeSceneDrag(stage, onDrag, dragButton = 0) {
   const t = {
     CLICK_SLACK: 7, // 单击容许的指间晃动（px），从按下点起算总位移
     dragging: false,
     moved: false,
     pointerId: null,
-    downTarget: null,
     x0: 0, y0: 0, lastX: 0, lastY: 0,
   };
   stage.addEventListener("pointerdown", (e) => {
+    if (e.button !== dragButton) return;
+    // 中键默认会触发浏览器自动滚屏，星河用它拖拽时需要阻止。
+    if (dragButton === 1) e.preventDefault();
     t.dragging = true;
     t.moved = false;
     t.pointerId = e.pointerId;
-    t.downTarget = e.target;
     t.x0 = t.lastX = e.clientX;
     t.y0 = t.lastY = e.clientY;
   });
@@ -70,21 +70,7 @@ function makeSceneDrag(stage, onDrag, onTap) {
     if (e.pointerId !== t.pointerId) return;
     t.dragging = false;
     t.pointerId = null;
-    t.downTarget = null;
   });
-  if (onTap) {
-    // 照片在星河里持续移动，pointerup 时可能已不在指针下；浏览器仍会把
-    // click 派给两次命中目标的公共祖先（舞台），因此在这里用 downTarget
-    // 还原用户真正按下的照片。到 click 阶段再开灯箱，可避免遮罩吞掉本次 click。
-    stage.addEventListener("click", (e) => {
-      const target = t.downTarget;
-      const tapped = target && !t.moved;
-      t.downTarget = null;
-      if (!tapped) return;
-      e.preventDefault();
-      onTap(target);
-    });
-  }
   return t;
 }
 
@@ -1016,22 +1002,13 @@ const Galaxy = {
     // 背景星幕（土星那层等首次进入时再建，见 enter）
     this.initStarfield();
 
-    // 拖拽 / 单击判定走共用的 makeSceneDrag（不用 setPointerCapture，
-    // 否则会抢走照片上的 click）。方向约定：跟手——往左拖场景往左走
-    // （相当于镜头往右看），上下同理，照片、星幕、土星三层全部一致。
-    this.track = makeSceneDrag(
-      this.stage,
-      (dx, dy) => {
-        this.lookX = Math.max(-32, Math.min(32, this.lookX - dx * 0.06));
-        this.lookY = Math.max(-24, Math.min(24, this.lookY + dy * 0.06));
-      },
-      (target) => {
-        const photoEl = target && target.closest(".galaxy-photo");
-        if (!photoEl) return;
-        const item = this.items.find((it) => it.el === photoEl);
-        if (item) Lightbox.open(item.photoIdx);
-      }
-    );
+    // 星河只用中键（按住滚轮）拖拽视角，左键完全留给照片预览；不用
+    // setPointerCapture。方向约定：跟手——往左拖场景往左走（相当于镜头
+    // 往右看），上下同理，照片、星幕、土星三层全部一致。
+    this.track = makeSceneDrag(this.stage, (dx, dy) => {
+      this.lookX = Math.max(-32, Math.min(32, this.lookX - dx * 0.06));
+      this.lookY = Math.max(-24, Math.min(24, this.lookY + dy * 0.06));
+    }, 1);
     // 滚轮加速 / 减速穿梭
     this.stage.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -1171,6 +1148,9 @@ const Galaxy = {
     it.src = thumbSrc(p);
     it.full = p.src;
     it.el.appendChild(it.img);
+    it.el.addEventListener("click", (e) => {
+      if (e.button === 0) Lightbox.open(it.photoIdx);
+    });
     this.space.appendChild(it.el);
     this.place(it);
     return it;

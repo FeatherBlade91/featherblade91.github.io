@@ -463,6 +463,13 @@ body[data-mode="slideshow"] .nav-pill.active {
   position: absolute; inset: 0; pointer-events: none; z-index: 2;
   background: radial-gradient(ellipse at center, transparent 55%, rgba(12, 16, 34, 0.55) 100%);
 }
+.galaxy-hint {
+  position: absolute; left: 50%; bottom: 18px; z-index: 4;
+  transform: translateX(-50%); pointer-events: none; white-space: nowrap;
+  color: rgba(255, 255, 255, 0.42); font-size: 12px; letter-spacing: 0.08em;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
+  user-select: none;
+}
 
 /* ===== 幻灯片（全屏沉浸式） ===== */
 #page-slideshow { padding: 0; }
