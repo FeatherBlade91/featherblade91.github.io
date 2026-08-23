@@ -282,7 +282,7 @@ const Ring = {
     this.track = makeSceneDrag(stage, (dx, dy) => {
       this.velocity = dx * 2.4;
       this.cam -= dx * 2.4;
-      this.tilt = Math.max(-24, Math.min(14, this.tilt - dy * 0.08));
+      this.tilt = Math.max(-24, Math.min(14, this.tilt + dy * 0.08));
     });
 
     const loop = () => {

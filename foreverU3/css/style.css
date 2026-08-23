@@ -262,12 +262,6 @@ body[data-mode="slideshow"] .nav-pill.active {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.page-title {
-  text-align: center; font-size: clamp(26px, 4vw, 40px); font-weight: 700;
-  background: linear-gradient(120deg, var(--blue-deep), var(--pink-deep));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  letter-spacing: 2px;
-}
 .page-desc { text-align: center; color: var(--ink-soft); margin: 10px 0 30px; font-size: 15px; }
 
 /* ===== 首页 ===== */
@@ -371,7 +365,6 @@ body[data-mode="slideshow"] .nav-pill.active {
 /* ===== 3D 旋转相册 ===== */
 #page-ring { padding-top: 84px; padding-bottom: 10px; }
 #page-ring.active { display: flex; flex-direction: column; }
-#page-ring .page-title { margin-bottom: 4px; }
 .ring-stage {
   position: relative;
   flex: 1; min-height: calc(100vh - 160px); display: flex; align-items: center; justify-content: center;
