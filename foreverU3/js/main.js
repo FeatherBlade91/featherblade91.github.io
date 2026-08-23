@@ -28,26 +28,31 @@ function setThumb(img, p) {
 /* ---------- 场景拖拽 / 单击判定（3D 相册与星河漫游共用） ----------
  * 统一的「拖动场景」手势：pointerdown 记下起点，window 级 pointermove
  * 把每次增量回调给 onDrag(dx, dy)；从起点累计位移超过 CLICK_SLACK 才算
- * 「拖过」，否则手指松开时元素上相继触发的 click 仍按单击处理。
+ * 「拖过」。可选的 onTap 会记住按下时的元素，在松开时优先处理单击；
+ * 这能覆盖元素自身在按下与松开之间发生位移、导致原生 click 丢失的场景。
  * 想看大图的模式统一在单击里调 Lightbox.open()——
  * 大图呈现全站只有灯箱这一套，别另写。
  * 注意：不要用 setPointerCapture，它会把 click 重定向到舞台元素，
  * 照片卡片上的单击就收不到了。 */
-function makeSceneDrag(stage, onDrag) {
+function makeSceneDrag(stage, onDrag, onTap) {
   const t = {
     CLICK_SLACK: 7, // 单击容许的指间晃动（px），从按下点起算总位移
     dragging: false,
     moved: false,
+    pointerId: null,
+    downTarget: null,
     x0: 0, y0: 0, lastX: 0, lastY: 0,
   };
   stage.addEventListener("pointerdown", (e) => {
     t.dragging = true;
     t.moved = false;
+    t.pointerId = e.pointerId;
+    t.downTarget = e.target;
     t.x0 = t.lastX = e.clientX;
     t.y0 = t.lastY = e.clientY;
   });
   window.addEventListener("pointermove", (e) => {
-    if (!t.dragging) return;
+    if (!t.dragging || e.pointerId !== t.pointerId) return;
     const dx = e.clientX - t.lastX;
     const dy = e.clientY - t.lastY;
     t.lastX = e.clientX;
@@ -55,9 +60,19 @@ function makeSceneDrag(stage, onDrag) {
     if (Math.hypot(e.clientX - t.x0, e.clientY - t.y0) > t.CLICK_SLACK) t.moved = true;
     onDrag(dx, dy);
   });
-  const end = () => { t.dragging = false; };
-  window.addEventListener("pointerup", end);
-  window.addEventListener("pointercancel", end);
+  window.addEventListener("pointerup", (e) => {
+    if (!t.dragging || e.pointerId !== t.pointerId) return;
+    t.dragging = false;
+    if (!t.moved && onTap) onTap(t.downTarget);
+    t.pointerId = null;
+    t.downTarget = null;
+  });
+  window.addEventListener("pointercancel", (e) => {
+    if (e.pointerId !== t.pointerId) return;
+    t.dragging = false;
+    t.pointerId = null;
+    t.downTarget = null;
+  });
   return t;
 }
 
@@ -992,10 +1007,19 @@ const Galaxy = {
     // 拖拽 / 单击判定走共用的 makeSceneDrag（不用 setPointerCapture，
     // 否则会抢走照片上的 click）。方向约定：跟手——往左拖场景往左走
     // （相当于镜头往右看），上下同理，照片、星幕、土星三层全部一致。
-    this.track = makeSceneDrag(this.stage, (dx, dy) => {
-      this.lookX = Math.max(-32, Math.min(32, this.lookX - dx * 0.06));
-      this.lookY = Math.max(-24, Math.min(24, this.lookY + dy * 0.06));
-    });
+    this.track = makeSceneDrag(
+      this.stage,
+      (dx, dy) => {
+        this.lookX = Math.max(-32, Math.min(32, this.lookX - dx * 0.06));
+        this.lookY = Math.max(-24, Math.min(24, this.lookY + dy * 0.06));
+      },
+      (target) => {
+        const photoEl = target && target.closest(".galaxy-photo");
+        if (!photoEl) return;
+        const item = this.items.find((it) => it.el === photoEl);
+        if (item) Lightbox.open(item.photoIdx);
+      }
+    );
     // 滚轮加速 / 减速穿梭
     this.stage.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -1135,9 +1159,6 @@ const Galaxy = {
     it.src = thumbSrc(p);
     it.full = p.src;
     it.el.appendChild(it.img);
-    it.el.addEventListener("click", () => {
-      if (!this.track.moved) Lightbox.open(it.photoIdx);
-    });
     this.space.appendChild(it.el);
     this.place(it);
     return it;
