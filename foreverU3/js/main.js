@@ -28,8 +28,9 @@ function setThumb(img, p) {
 /* ---------- 场景拖拽 / 单击判定（3D 相册与星河漫游共用） ----------
  * 统一的「拖动场景」手势：pointerdown 记下起点，window 级 pointermove
  * 把每次增量回调给 onDrag(dx, dy)；从起点累计位移超过 CLICK_SLACK 才算
- * 「拖过」。可选的 onTap 会记住按下时的元素，在松开时优先处理单击；
- * 这能覆盖元素自身在按下与松开之间发生位移、导致原生 click 丢失的场景。
+ * 「拖过」。可选的 onTap 会记住按下时的元素，在随后 click 到达舞台时
+ * 优先处理单击；这能覆盖元素自身发生位移、导致 click 落到舞台的场景，
+ * 又避免在 pointerup 阶段过早插入弹层、让紧随其后的 click 被弹层接走。
  * 想看大图的模式统一在单击里调 Lightbox.open()——
  * 大图呈现全站只有灯箱这一套，别另写。
  * 注意：不要用 setPointerCapture，它会把 click 重定向到舞台元素，
@@ -63,9 +64,7 @@ function makeSceneDrag(stage, onDrag, onTap) {
   window.addEventListener("pointerup", (e) => {
     if (!t.dragging || e.pointerId !== t.pointerId) return;
     t.dragging = false;
-    if (!t.moved && onTap) onTap(t.downTarget);
     t.pointerId = null;
-    t.downTarget = null;
   });
   window.addEventListener("pointercancel", (e) => {
     if (e.pointerId !== t.pointerId) return;
@@ -73,6 +72,19 @@ function makeSceneDrag(stage, onDrag, onTap) {
     t.pointerId = null;
     t.downTarget = null;
   });
+  if (onTap) {
+    // 照片在星河里持续移动，pointerup 时可能已不在指针下；浏览器仍会把
+    // click 派给两次命中目标的公共祖先（舞台），因此在这里用 downTarget
+    // 还原用户真正按下的照片。到 click 阶段再开灯箱，可避免遮罩吞掉本次 click。
+    stage.addEventListener("click", (e) => {
+      const target = t.downTarget;
+      const tapped = target && !t.moved;
+      t.downTarget = null;
+      if (!tapped) return;
+      e.preventDefault();
+      onTap(target);
+    });
+  }
   return t;
 }
 
@@ -1400,6 +1412,7 @@ function buildTimeline() {
 /* ---------- 灯箱 ---------- */
 const Lightbox = {
   idx: 0,
+  resumeGalaxy: false,
   init() {
     $("#lbClose").addEventListener("click", () => this.close());
     $("#lbPrev").addEventListener("click", () => this.step(-1));
@@ -1415,11 +1428,22 @@ const Lightbox = {
     });
   },
   open(i) {
+    const box = $("#lightbox");
+    // 星河的照片层是持续变化的 3D 合成层；隔着 backdrop-filter 继续推进和
+    // 回收槽位会产生明显闪烁。首次打开时暂停，翻页不重复改写恢复状态。
+    if (!box.classList.contains("open")) {
+      this.resumeGalaxy = document.body.dataset.mode === "galaxy" && Galaxy.running;
+      if (this.resumeGalaxy) Galaxy.running = false;
+    }
     this.idx = i;
     this.render();
-    $("#lightbox").classList.add("open");
+    box.classList.add("open");
   },
-  close() { $("#lightbox").classList.remove("open"); },
+  close() {
+    $("#lightbox").classList.remove("open");
+    if (this.resumeGalaxy && document.body.dataset.mode === "galaxy") Galaxy.running = true;
+    this.resumeGalaxy = false;
+  },
   step(d) { this.open((this.idx + d + PHOTOS.length) % PHOTOS.length); },
   render() {
     const p = PHOTOS[this.idx];
