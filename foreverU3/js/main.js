@@ -952,21 +952,26 @@ const SaturnSky = {
  * 隧道里同一时刻只保留少量照片槽位，飞过身后的槽位回收并
  * 换成未出场的照片，循环展示全集，控制内存与渲染开销。
  * 背景层：远处一颗 WebGL 土星（SaturnSky）+ canvas 星幕（深度视差 + 闪烁）+ 流星雨。
- * 右上角设置面板（ModeSettings）能调三样：行星大小 / 单次照片数量 / 照片消失距离。 */
+ * 右上角设置面板（ModeSettings）能调四样：照片移动速度 / 行星大小 /
+ * 单次照片数量 / 照片消失距离。 */
 const Galaxy = {
   DEPTH: 7000,         // 隧道总长（px）
   PERSPECTIVE: 900,    // 与 .galaxy-stage 的 perspective 保持一致
-  /* ----- 设置面板的三项：默认值 + 滑条范围（存 localStorage，见 loadCfg） ----- */
+  /* ----- 设置面板各项：默认值 + 滑条范围（存 localStorage，见 loadCfg） ----- */
+  DEF_SPEED: 2.4,      // 照片朝镜头（屏幕外）移动的基础速度，单位约为 px/帧
+  SPEED_MIN: 0.4,
+  SPEED_MAX: 8,
   DEF_PLANET: 1.8,     // 行星大小：等比例缩放土星（含星环），直接作用在 SaturnSky.scale
   PLANET_MIN: 0.5,
   PLANET_MAX: 3.0,
   DEF_SLOTS: innerWidth < 768 ? 10 : 18, // 单次照片数默认值：小屏少一些
   MIN_SLOTS: 4,
-  MAX_SLOTS: 30,       // 同屏越多越吃性能（36 张时明显掉帧），封顶 30
-  DEF_DEPTH: 4600,     // 照片消失距离：超过这个深度的照片隐藏且不加载，控制内存和流量
-  MIN_DEPTH: 1200,
+  MAX_SLOTS: 50,
+  VISIBLE_DEPTH: 4600, // 进入这个深度才显示并加载缩略图，控制内存和流量
+  DEF_NEAR: 300,       // 照片距镜头这么近时消失；值越小，照片越晚消失
+  MIN_NEAR: 100,
+  MAX_NEAR: 1200,
   cam: 0,
-  speed: 2.4,
   speedBoost: 0,
   lookX: 0,
   lookY: 0,
@@ -975,7 +980,7 @@ const Galaxy = {
   nextPhoto: 0,
   nextShoot: 0,
   running: false,
-  cfg: null,   // { planet, slots, depth } 用户设置，loadCfg 从 localStorage 恢复
+  cfg: null,   // { speed, planet, slots, near } 用户设置，loadCfg 从 localStorage 恢复
   init() {
     this.loadCfg();
     this.stage = $("#galaxyStage");
@@ -1000,15 +1005,15 @@ const Galaxy = {
     const loop = () => {
       if (this.running) {
         this.speedBoost *= 0.97; // 加速效果衰减
-        this.cam += Math.max(0.4, this.speed + this.speedBoost);
+        this.cam += Math.max(this.SPEED_MIN, this.cfg.speed + this.speedBoost);
         this.lookX *= 0.995;
         this.lookY *= 0.995;
         this.space.style.transform =
           `rotateY(${this.lookX}deg) rotateX(${this.lookY}deg) translateZ(${this.cam}px)`;
         for (const it of this.items) {
           const rel = it.z - this.cam;
-          if (rel < -300) {
-            // 飞到相机身后：回收送到隧道尽头，并换成下一张未出场的照片
+          if (rel <= this.cfg.near) {
+            // 到达用户设置的最近距离：回收送到隧道尽头，并换成下一张未出场的照片
             it.z += this.DEPTH;
             it.photoIdx = this.nextPhoto % PHOTOS.length;
             this.nextPhoto++;
@@ -1026,7 +1031,7 @@ const Galaxy = {
             it.el.style.opacity = "0";
             continue;
           }
-          const vis = rel < this.cfg.depth; // 「照片消失距离」每帧现读，滑条拖动即时生效
+          const vis = rel < this.VISIBLE_DEPTH;
           if (vis !== it.visible) {
             it.visible = vis;
             it.el.style.visibility = vis ? "" : "hidden";
@@ -1054,21 +1059,30 @@ const Galaxy = {
 
   /* ----- 设置面板的存取（右上角 ⚙ → 星河漫游） ----- */
   loadCfg() {
-    let cfg = { planet: this.DEF_PLANET, slots: this.DEF_SLOTS, depth: this.DEF_DEPTH };
+    let cfg = {
+      speed: this.DEF_SPEED,
+      planet: this.DEF_PLANET,
+      slots: this.DEF_SLOTS,
+      near: this.DEF_NEAR,
+    };
     try {
       cfg = Object.assign(cfg, JSON.parse(localStorage.getItem("galaxyCfg") || "{}"));
     } catch (e) { /* 存了坏数据就回落默认 */ }
+    // 旧版 depth 表示远处开始显示的位置，语义与新版相反，不能沿用。
+    delete cfg.depth;
     // 越界值（比如手改过 localStorage）夹回滑条范围
     const clamp = (v, lo, hi, dflt) => (isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dflt);
+    cfg.speed = clamp(+cfg.speed, this.SPEED_MIN, this.SPEED_MAX, this.DEF_SPEED);
     cfg.planet = clamp(+cfg.planet, this.PLANET_MIN, this.PLANET_MAX, this.DEF_PLANET);
     cfg.slots = Math.round(clamp(+cfg.slots, this.MIN_SLOTS, this.MAX_SLOTS, this.DEF_SLOTS));
-    cfg.depth = clamp(+cfg.depth, this.MIN_DEPTH, this.DEPTH, this.DEF_DEPTH);
+    cfg.near = clamp(+cfg.near, this.MIN_NEAR, this.MAX_NEAR, this.DEF_NEAR);
     this.cfg = cfg;
     SaturnSky.scale = cfg.planet;
   },
   saveCfg() {
     localStorage.setItem("galaxyCfg", JSON.stringify(this.cfg));
   },
+  setSpeed(v) { this.cfg.speed = v; this.saveCfg(); },
   setPlanet(v) { this.cfg.planet = v; this.saveCfg(); SaturnSky.scale = v; },
   // 同屏照片数实时增减：新增的槽位生成在当前机位前方的隧道深处，飞近了
   // 自然淡入；减少的从末尾摘掉，其余照片的分布不受影响
@@ -1077,11 +1091,12 @@ const Galaxy = {
     this.saveCfg();
     this.buildSlots();
   },
-  setDepth(v) { this.cfg.depth = v; this.saveCfg(); },
+  setNear(v) { this.cfg.near = v; this.saveCfg(); },
   resetCfg() {
+    this.cfg.speed = this.DEF_SPEED;
     this.cfg.planet = this.DEF_PLANET;
     this.cfg.slots = this.DEF_SLOTS;
-    this.cfg.depth = this.DEF_DEPTH;
+    this.cfg.near = this.DEF_NEAR;
     this.saveCfg();
     SaturnSky.scale = this.cfg.planet;
     this.buildSlots();
@@ -1099,7 +1114,8 @@ const Galaxy = {
       photoIdx: this.nextPhoto % PHOTOS.length,
       x: rand(-46, 46),          // vw
       y: rand(-38, 38),          // vh
-      z: this.cam + rand(400, this.DEPTH), // 距相机的深度（中途增补时从当前机位前方生成）
+      // 距相机的深度（中途增补时从当前机位前方、消失线之外生成）
+      z: this.cam + rand(Math.max(400, this.cfg.near + 100), this.DEPTH),
       visible: false,
       loaded: false,
     };
@@ -1458,7 +1474,7 @@ function initMusic() {
  * 子页面加设置再登记一项即可；没有登记的子页面会直接隐藏 ⚙ 按钮。
  * 目前有两页：
  *   3D 相册（ring）：旋转速度 + 图片大小；
- *   星河漫游（galaxy）：行星大小 + 单次照片数量 + 照片消失距离。
+ *   星河漫游（galaxy）：照片移动速度 + 行星大小 + 单次照片数量 + 照片消失距离。
  * 每次拖动即时生效并存 localStorage，可一键恢复默认值。 */
 const ModeSettings = {
   defs: {
@@ -1487,6 +1503,13 @@ const ModeSettings = {
       title: "🌌 星河漫游设置",
       rows: [
         {
+          label: "照片移动速度",
+          min: Galaxy.SPEED_MIN, max: Galaxy.SPEED_MAX, step: 0.1,
+          get: () => Galaxy.cfg.speed,
+          set: (v) => Galaxy.setSpeed(v),
+          fmt: (v) => Math.round((v / Galaxy.DEF_SPEED) * 100) + "%",
+        },
+        {
           label: "行星大小",
           min: Galaxy.PLANET_MIN, max: Galaxy.PLANET_MAX, step: 0.05,
           get: () => Galaxy.cfg.planet,
@@ -1502,10 +1525,10 @@ const ModeSettings = {
         },
         {
           label: "照片消失距离",
-          min: Galaxy.MIN_DEPTH, max: Galaxy.DEPTH, step: 100,
-          get: () => Galaxy.cfg.depth,
-          set: (v) => Galaxy.setDepth(v),
-          fmt: (v) => Math.round(v) + " px",
+          min: Galaxy.MIN_NEAR, max: Galaxy.MAX_NEAR, step: 50,
+          get: () => Galaxy.cfg.near,
+          set: (v) => Galaxy.setNear(v),
+          fmt: (v) => "距镜头 " + Math.round(v) + " px",
         },
       ],
       reset: () => Galaxy.resetCfg(),
