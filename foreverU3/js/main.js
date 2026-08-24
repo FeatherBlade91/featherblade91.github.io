@@ -94,7 +94,8 @@ function initBubbles() {
     "rgba(159, 210, 255, 0.4)",
     "rgba(217, 204, 255, 0.35)",
   ];
-  for (let i = 0; i < 26; i++) {
+  // 减量求精：约一半的泡泡 + CSS 给 1/3 加模糊，做出景深
+  for (let i = 0; i < 14; i++) {
     const b = el("span", "bubble");
     const size = rand(12, 78);
     b.style.width = b.style.height = size + "px";
@@ -221,32 +222,52 @@ function initHome() {
     switchBtn.textContent = mode === "days" ? "🗓 换成 几年几月几周几天" : "🗓 换成 总天数";
   }
 
-  function tick() {
+  function currentVals() {
     const nowB = beijingNow();
     let diff = Math.max(0, nowB.getTime() - startUtc);
     const h = Math.floor((diff % 86400000) / 3600000);
     const mi = Math.floor((diff % 3600000) / 60000);
     const s = Math.floor((diff % 60000) / 1000);
-    let vals;
-    if (mode === "days") {
-      vals = [Math.floor(diff / 86400000), h, mi, s];
-    } else {
-      const c = calendarParts(nowB);
-      vals = [c.y, c.m, c.w, c.d, h, mi, s];
-    }
+    if (mode === "days") return [Math.floor(diff / 86400000), h, mi, s];
+    const c = calendarParts(nowB);
+    return [c.y, c.m, c.w, c.d, h, mi, s];
+  }
+
+  function showVals(vals) {
     vals.forEach((v, i) => {
       numEls[i].textContent = mode === "days" && i > 0 ? String(v).padStart(2, "0") : v;
     });
+  }
+
+  // 首次进入 / 切换计时方式时数字从 0 滚到目标值，随后交还给每秒 tick
+  let counting = false;
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function countUp(vals) {
+    if (reduceMotion) { showVals(vals); return; }
+    counting = true;
+    const t0 = performance.now(), D = 1100;
+    const ease = (x) => 1 - Math.pow(1 - x, 3);
+    (function step(now) {
+      const k = Math.min(1, (now - t0) / D);
+      showVals(vals.map((v) => Math.round(v * ease(k))));
+      if (k < 1) requestAnimationFrame(step);
+      else { counting = false; tick(); }
+    })(t0);
+  }
+
+  function tick() {
+    if (counting) return;
+    showVals(currentVals());
   }
 
   switchBtn.addEventListener("click", () => {
     mode = mode === "days" ? "calendar" : "days";
     localStorage.setItem("timerMode", mode);
     buildCells();
-    tick();
+    countUp(currentVals());
   });
   buildCells();
-  tick();
+  countUp(currentVals());
   setInterval(tick, 1000);
 }
 
@@ -1002,13 +1023,30 @@ const Galaxy = {
     // 背景星幕（土星那层等首次进入时再建，见 enter）
     this.initStarfield();
 
-    // 星河只用中键（按住滚轮）拖拽视角，左键完全留给照片预览；不用
-    // setPointerCapture。方向约定：跟手——往左拖场景往左走（相当于镜头
-    // 往右看），上下同理，照片、星幕、土星三层全部一致。
+    // 拖拽方向约定：跟手——往左拖场景往左走（相当于镜头往右看），上下同理，
+    // 照片、星幕、土星三层全部一致。不用 setPointerCapture。
     this.track = makeSceneDrag(this.stage, (dx, dy) => {
       this.lookX = Math.max(-32, Math.min(32, this.lookX - dx * 0.06));
       this.lookY = Math.max(-24, Math.min(24, this.lookY + dy * 0.06));
-    }, 1);
+    });
+    // 左键 / 触屏点按看大图。Chromium 的 preserve-3d 命中检测打不到位于
+    // stage 背景平面之后（translateZ 为负）的照片，click 总落在 stage 上，
+    // 所以按 getBoundingClientRect 手动命中；若浏览器正常命中了照片本身
+    // （照片上有自己的 click 监听），closest 检查会跳过这里，不会重复打开。
+    this.stage.addEventListener("click", (e) => {
+      if (e.button !== 0 || this.track.moved) return;
+      if (e.target.closest && e.target.closest(".galaxy-photo")) return;
+      let hit = null, best = Infinity;
+      for (const it of this.items) {
+        if (!it.visible) continue;
+        const r = it.el.getBoundingClientRect();
+        if (e.clientX < r.left || e.clientX > r.right ||
+            e.clientY < r.top || e.clientY > r.bottom) continue;
+        const rel = it.z - this.cam; // 重叠时离镜头近（视觉最前）的优先
+        if (rel < best) { best = rel; hit = it; }
+      }
+      if (hit) Lightbox.open(hit.photoIdx);
+    });
     // 滚轮加速 / 减速穿梭
     this.stage.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -1437,7 +1475,7 @@ const Lightbox = {
 function initLetter() {
   const modal = $("#letterModal");
   const petals = $("#petals");
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 12; i++) {
     const p = el("span", "petal");
     const s = rand(10, 22);
     p.style.width = s + "px";

@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LYK ♥ DMY · 我们的恋爱相册</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💗</text></svg>" />
+  <link rel="preload" href="fonts/cormorantgaramond-600i-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="css/fonts.css" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -44,12 +46,13 @@
             <svg viewBox="0 0 100 92" width="1em" height="0.92em" aria-hidden="true">
               <defs>
                 <linearGradient id="heartGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stop-color="#8fc7f5"/>
-                  <stop offset="0.5" stop-color="#d9b3f0"/>
-                  <stop offset="1" stop-color="#ff9ec7"/>
+                  <stop offset="0" stop-color="#7fb8ec"/>
+                  <stop offset="0.5" stop-color="#b7a6e8"/>
+                  <stop offset="1" stop-color="#ffa6c6"/>
                 </linearGradient>
               </defs>
               <path fill="url(#heartGrad)" d="M50 84 C22 62 4 44 4 26 C4 11 15 3 27 3 C37 3 45 9 50 18 C55 9 63 3 73 3 C85 3 96 11 96 26 C96 44 78 62 50 84 Z"/>
+              <path class="ecg" pathLength="100" d="M13 40 H33 L39 28 L47 53 L53 33 L57 40 H87"/>
               <ellipse cx="32" cy="22" rx="10" ry="6" fill="#ffffff" opacity="0.55" transform="rotate(-20 32 22)"/>
             </svg>
           </span>
@@ -85,7 +88,7 @@
       <div class="galaxy-stage" id="galaxyStage">
         <div class="galaxy-space" id="galaxySpace"></div>
         <div class="galaxy-vignette"></div>
-        <div class="galaxy-hint">按住滚轮拖拽视角 · 左键点击查看照片</div>
+        <div class="galaxy-hint">拖拽转动视角 · 滚轮加速穿梭 · 点击照片看大图</div>
       </div>
     </section>
 
@@ -142,6 +145,6 @@
 
   <script src="js/config.js"></script>
   <script src="js/music.js"></script>
-  <script src="js/main.js?v=20260823-2"></script>
+  <script src="js/main.js?v=20260825"></script>
 </body>
 </html>
