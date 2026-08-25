@@ -692,24 +692,33 @@ const Ring = {
   },
 };
 
-/* ---------- 星河漫游的背景天体：土星 ----------
- * 规格对齐 saturn.html：星幕球壳 + 程序化条纹贴图的扁球行星（赤道半径 20、
- * 极扁率 0.89、转轴倾角 26.7°、自转 0.12）+ 分区粒子环（B 环 / 卡西尼缝 / A 环，
- * 开普勒差速 ω ∝ r^-1.5，加法混合）+ 大气辉光，太阳光 / 环境光 / 边缘光三盏灯。
- * saturn.html 用的是 three.js，这里按同一套参数用原生 WebGL 重写，保持整站零依赖；
+/* ---------- 星河漫游的背景天体：比邻双星 ----------
+ * 中央是一对绕共同质心互旋的双星（自发光球体，无贴图、不做光照）：A 暖金、
+ * B 银蓝白，配色锚定真实双星 Albireo（辇道增七，著名的金-蓝双星）。两星完美
+ * 反相（θB = θA + π），互旋轨道与星环共面（同 26.7° 转轴倾角）——照片环与
+ * 粒子环构成环双星星环（circumbinary ring）：回忆绕着「你们俩」公转。
+ * 外围规格沿用 saturn.html：星幕球壳 + 分区粒子环（B 环 / 卡西尼缝 / A 环，
+ * 开普勒差速 ω ∝ r^-1.5，加法混合）+ 每颗星一团辉光。
+ * saturn.html 用的是 three.js，这里用原生 WebGL 重写，保持整站零依赖；
  * 粒子数按“背景层”的定位下调（环 6 万 → 4.6 万、星 8000 → 6000）。
  * 只在首次进入星河漫游时初始化：页面隐藏时 clientWidth 为 0，提前建画布会得到 0×0。 */
 const SaturnSky = {
-  TILT: (26.7 * Math.PI) / 180, // 转轴倾角，行星与环共用
-  FLATTEN: 0.89,                // 扁率：土星两极明显压扁
+  TILT: (26.7 * Math.PI) / 180, // 转轴倾角，双星轨道与环共用
   RING_COUNT: 46000,
   STAR_COUNT: 6000,
-  DIST: 215,                    // 相机到土星的基准距离
-  scale: 1.8,                   // 行星大小（本体+星环+辉光等比例）：除进相机距离，越大越近越显大
+  DIST: 215,                    // 相机到双星质心的基准距离
+  scale: 1.8,                   // 双星大小（本体+星环+辉光等比例）：除进相机距离，越大越近越显大
+  BINARY_W: (2 * Math.PI) / 32, // 双星互旋角速度：约 32 秒一圈，慢而可察觉
+  /* 双星规格：radius 星体半径 / orbitR 绕质心半径（反相绕行）/ core 核心色 /
+   * glow 辉光色 / twPhase 闪烁相位（异相才有“活”感）。间距要够开：
+   * 两星表面之间留 ~8（19.3 − 11），太近会糊成一团；最大外沿 10.5+6=16.5 <
+   * 粒子环内沿 24，环与双星之间留一道干净的缝。 */
+  STAR_A: { radius: 6, orbitR: 10.5, core: [1.0, 0.86, 0.60], glow: [1.0, 0.78, 0.42], twPhase: 0 },
+  STAR_B: { radius: 5, orbitR: 8.8,  core: [0.82, 0.90, 1.0], glow: [0.55, 0.70, 1.0], twPhase: 2.4 },
   ready: false,
 
   /* ===== 4×4 / 3×3 矩阵小工具（列主序，可直接喂给 WebGL） ===== */
-  // shiftX / shiftY：镜头平移（NDC 单位）。土星现在居中，传 0；
+  // shiftX / shiftY：镜头平移（NDC 单位）。双星质心居中，传 0；
   // 参数保留着，以后想把天体挪离正中直接改调用处即可
   perspective(fovy, aspect, near, far, shiftX, shiftY) {
     const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
@@ -735,21 +744,11 @@ const SaturnSky = {
       -(zx * eye[0] + zy * eye[1] + zz * eye[2]), 1,
     ]);
   },
-  mul(a, b) {
-    const o = new Float32Array(16);
-    for (let c = 0; c < 4; c++)
-      for (let r = 0; r < 4; r++)
-        o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
-    return o;
-  },
-  rotY(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]); },
   rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); },
-  scaleM(x, y, z) { return new Float32Array([x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]); },
-  mat3of(m) { return new Float32Array([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]); },
 
   /* ===== 相机（Galaxy 每帧调这两个算机位，再把自己的 view 矩阵拿去摆照片；
    * 两层共用一台相机，对齐原理见 Galaxy 的头注释） ===== */
-  // 相机距离（世界单位）：行星大小设置除进基准距离，zoom 是用户推拉倍率；
+  // 相机距离（世界单位）：双星大小设置除进基准距离，zoom 是用户推拉倍率；
   // 竖屏视野窄，退远一点免得占满整块屏。下限贴在照片环外 10：再近相机就
   // 钻进照片环里去了（环绕半径可调，下限跟着它走）。
   camD(zoom, aspect) {
@@ -819,52 +818,6 @@ const SaturnSky = {
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride * 4, offset * 4);
     }
-  },
-
-  /* ===== 行星贴图：canvas 程序化生成（横向条纹 + 噪点） ===== */
-  buildTexture() {
-    const W = 1024, H = 512;
-    const cv = document.createElement("canvas");
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext("2d");
-
-    const grad = ctx.createLinearGradient(0, 0, 0, H); // 两极 → 赤道
-    [[0, "#c8a86b"], [0.18, "#e2c07a"], [0.3, "#d4aa65"], [0.45, "#f0d08a"], [0.5, "#e8c870"],
-     [0.55, "#f0d08a"], [0.7, "#d4aa65"], [0.82, "#e2c07a"], [1, "#c8a86b"]]
-      .forEach(([at, c]) => grad.addColorStop(at, c));
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-
-    const bands = [
-      { y: 0.12, w: 0.04, c: "rgba(160,110,50,0.35)" },
-      { y: 0.22, w: 0.025, c: "rgba(200,160,80,0.25)" },
-      { y: 0.32, w: 0.05, c: "rgba(140,90,40,0.40)" },
-      { y: 0.41, w: 0.03, c: "rgba(220,180,90,0.30)" },
-      { y: 0.50, w: 0.06, c: "rgba(130,85,35,0.45)" },
-      { y: 0.60, w: 0.03, c: "rgba(210,170,85,0.28)" },
-      { y: 0.68, w: 0.04, c: "rgba(150,100,45,0.38)" },
-      { y: 0.78, w: 0.03, c: "rgba(195,155,75,0.22)" },
-      { y: 0.88, w: 0.04, c: "rgba(160,110,50,0.30)" },
-    ];
-    for (const b of bands) {
-      const bg = ctx.createLinearGradient(0, (b.y - b.w / 2) * H, 0, (b.y + b.w / 2) * H);
-      bg.addColorStop(0, "transparent");
-      bg.addColorStop(0.5, b.c);
-      bg.addColorStop(1, "transparent");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, (b.y - b.w) * H, W, b.w * 2 * H);
-    }
-
-    const imgd = ctx.getImageData(0, 0, W, H);
-    const d = imgd.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const n = (Math.random() - 0.5) * 12;
-      d[i] = Math.min(255, Math.max(0, d[i] + n));
-      d[i + 1] = Math.min(255, Math.max(0, d[i + 1] + n * 0.9));
-      d[i + 2] = Math.min(255, Math.max(0, d[i + 2] + n * 0.6));
-    }
-    ctx.putImageData(imgd, 0, 0);
-    return cv;
   },
 
   /* ===== 几何体 ===== */
@@ -968,43 +921,30 @@ const SaturnSky = {
          gl_FragColor = vec4(1.0, 1.0, 1.0, a * 0.85);
        }`);
 
-    this.planetProg = this.makeProgram(
+    /* 双星星体：自发光（不做光照）——核心炽亮、边缘略柔（limb softening），
+     * uBright 带心跳脉冲与异相闪烁。模型矩阵只有平移+均匀缩放，法线方向不变，
+     * 直接取 uView 的 3×3 部分变换到视空间。 */
+    this.starBodyProg = this.makeProgram(
       `attribute vec3 aPos;
        attribute vec3 aNor;
-       attribute vec2 aUv;
        ${COMMON}
-       uniform mat3 uNormalMat;
-       varying vec3 vNor;
-       varying vec3 vWorld;
-       varying vec2 vUv;
+       varying vec3 vNorV;
+       varying vec3 vPosV;
        void main() {
-         vec4 world = uModel * vec4(aPos, 1.0);
-         vWorld = world.xyz;
-         vNor = uNormalMat * aNor;
-         vUv = aUv;
-         gl_Position = uProj * (uView * world);
+         vec4 mv = uView * (uModel * vec4(aPos, 1.0));
+         vPosV = mv.xyz;
+         vNorV = mat3(uView) * aNor;
+         gl_Position = uProj * mv;
        }`,
       `precision mediump float;
-       uniform sampler2D uTex;
-       uniform vec3 uEye;
-       uniform float uExposure;
-       varying vec3 vNor;
-       varying vec3 vWorld;
-       varying vec2 vUv;
+       uniform vec3 uCore;
+       uniform float uBright;
+       varying vec3 vNorV;
+       varying vec3 vPosV;
        void main() {
-         vec3 N = normalize(vNor);
-         vec3 base = texture2D(uTex, vUv).rgb;
-         // 光源挂在镜头旁（略偏上）：土星无论公转/被拖到哪个角度，
-         // 亮面始终朝向观众，只剩上下一点明暗渐变保住立体感
-         vec3 L = normalize(uEye - vWorld + vec3(0.0, 50.0, 0.0));
-         float diff = max(dot(N, L), 0.0);
-         vec3 col = base * vec3(1.0, 0.961, 0.878) * diff * 2.2;
-         col += base * vec3(0.067, 0.133, 0.267) * 0.6;  // 环境光 0x112244
-         vec3 R = normalize(vec3(-200.0, -40.0, -100.0)); // 边缘光 0x4466aa 强度 0.4
-         col += base * vec3(0.267, 0.4, 0.667) * max(dot(N, R), 0.0) * 0.4;
-         vec3 H = normalize(L + normalize(uEye - vWorld)); // 高光 shininess 18
-         col += vec3(0.15, 0.12, 0.06) * pow(max(dot(N, H), 0.0), 18.0) * step(0.001, diff);
-         gl_FragColor = vec4(col * uExposure, 1.0);
+         float facing = max(dot(normalize(vNorV), normalize(-vPosV)), 0.0);
+         vec3 col = uCore * (0.82 + 0.28 * facing);
+         gl_FragColor = vec4(col * uBright, 1.0);
        }`);
 
     this.ringProg = this.makeProgram(
@@ -1037,50 +977,42 @@ const SaturnSky = {
          gl_FragColor = vec4(uColor, soft * vAlpha);
        }`);
 
-    this.haloProg = this.makeProgram(
+    /* 星辉：以 uCenter 为中心、正对镜头的辉光 quad，从星心起 pow(1-d,2) 柔和
+     * 衰减、加法混合；每颗星各画一团。画在环之后、关深度测试，星心自然烧成
+     * 一团亮核，溢出的光落在附近环粒子上也像被星照亮。 */
+    this.glowProg = this.makeProgram(
       `attribute vec2 aQuad;
        uniform mat4 uProj;
        uniform mat4 uView;
+       uniform vec3 uCenter;
        uniform vec2 uSize;
        varying vec2 vQ;
        void main() {
-         vec3 c = (uView * vec4(0.0, 0.0, 0.0, 1.0)).xyz; // 土星中心，正对镜头
+         vec3 c = (uView * vec4(uCenter, 1.0)).xyz; // 星球中心，正对镜头
          vQ = aQuad;
          gl_Position = uProj * vec4(c + vec3(aQuad * uSize, 0.0), 1.0);
        }`,
       `precision mediump float;
+       uniform vec3 uColor;
        varying vec2 vQ;
        void main() {
          float d = length(vQ);
-         if (d > 1.0 || d < 0.469) discard;   // 内圈半径 60/128，贴着行星边缘起晕
-         float t = (d - 0.469) / 0.531;
-         vec3 c; float a;
-         if (t < 0.5) { c = mix(vec3(0.86,0.75,0.47), vec3(0.78,0.63,0.31), t / 0.5); a = mix(0.0, 0.08, t / 0.5); }
-         else if (t < 0.8) { c = mix(vec3(0.78,0.63,0.31), vec3(0.71,0.55,0.24), (t-0.5)/0.3); a = mix(0.08, 0.15, (t-0.5)/0.3); }
-         else { c = mix(vec3(0.71,0.55,0.24), vec3(0.63,0.47,0.20), (t-0.8)/0.2); a = mix(0.15, 0.0, (t-0.8)/0.2); }
-         gl_FragColor = vec4(c, a);
+         if (d > 1.0) discard;
+         gl_FragColor = vec4(uColor, pow(1.0 - d, 2.0) * 0.5);
        }`);
 
-    if (!this.starProg || !this.planetProg || !this.ringProg || !this.haloProg) {
+    if (!this.starProg || !this.starBodyProg || !this.ringProg || !this.glowProg) {
       cv.remove(); this.gl = null; return false;
     }
 
-    const sphere = this.buildSphere(20, 64, 48);
+    // 单位球两颗星共用：平移 + 均匀缩放摆位，逐颗星给颜色与亮度
+    const sphere = this.buildSphere(1, 48, 32);
     this.sphereBuf = this.buffer(sphere.data);
     this.sphereIdx = this.buffer(sphere.index, gl.ELEMENT_ARRAY_BUFFER);
     this.sphereCount = sphere.index.length;
     this.ringBuf = this.buffer(this.buildRings(this.RING_COUNT));
     this.starBuf = this.buffer(this.buildStars(this.STAR_COUNT));
-    this.haloBuf = this.buffer(new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
-
-    this.tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.buildTexture());
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    this.glowBuf = this.buffer(new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
 
     gl.clearColor(0, 0, 0, 0);
     this.resize();
@@ -1098,36 +1030,46 @@ const SaturnSky = {
     this.cv.height = Math.max(1, Math.round(h * dpr));
   },
 
-  /* 每帧渲染。机位由 Galaxy 统一计算（照片层与土星层共用一台相机，
+  /* 每帧渲染。机位由 Galaxy 统一计算（照片层与双星层共用一台相机，
    * 对齐原理见 Galaxy 的头注释），这里只收渲染参数：
-   * cam = { eye, pulse, spin }；pulse 是点土星的心跳脉冲（0..1，随帧衰减），
-   * spin 是照片环的拖动角 φ（粒子环同步跟随，自身开普勒自转保留）。 */
+   * cam = { eye, pulse, spin }；pulse 是点双星的心跳脉冲（0..1，随帧衰减，
+   * 两颗星一起提亮、轻轻呼吸），spin 是照片环的拖动角 φ（粒子环同步跟随，
+   * 自身开普勒自转保留）。 */
   render(t, cam) {
     const gl = this.gl;
     if (!gl || !this.ready) return;
-    const eye = cam.eye;
     const pulse = cam.pulse || 0;
-    const breathe = 1 + pulse * 0.03; // 脉冲时行星轻轻呼吸
+    const breathe = 1 + pulse * 0.03; // 脉冲时双星轻轻呼吸
     const W = this.cv.width, H = this.cv.height;
     gl.viewport(0, 0, W, H);
     // 深度的 clear 受 depthMask 掩码控制，而上一帧结尾（环/辉光 pass）把它关了——
-    // 不先打开，深度缓冲永远清不掉，行星本体会被上一帧的残影深度整块挡掉，
-    // 只剩环粒子和辉光的一点光晕（曾经长期把那团光误当成土星本体）
+    // 不先打开，深度缓冲永远清不掉，星体会被上一帧的残影深度整块挡掉
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     const aspect = W / H;
-    // 土星居中：不额外平移，照片环（CSS 层）与它同心、同机位
+    // 双星质心居中：不额外平移，照片环（CSS 层）与它同心、同机位
     const proj = this.perspective(Math.PI / 4, aspect, 1, 4000, 0, 0);
-    const view = this.lookAt(eye, [0, 0, 0]);
+    const view = this.lookAt(cam.eye, [0, 0, 0]);
     const pxScale = H / 900; // 点的大小跟分辨率走，换屏幕不会忽大忽小
-
-    // 行星：倾角 → 自转 → 压扁；法线要用逆转置，压扁的方向反过来除。
-    // 呼吸是均匀缩放，不影响法线方向，normalMat 不用带 breathe。
-    const spin = this.rotY(t * 0.12);
     const tilt = this.rotZ(this.TILT);
-    const planetModel = this.mul(tilt, this.mul(spin, this.scaleM(breathe, breathe * this.FLATTEN, breathe)));
-    const normalMat = this.mat3of(this.mul(tilt, this.mul(spin, this.scaleM(1, 1 / this.FLATTEN, 1))));
+
+    /* 双星互旋：在环面（y=0 平面）内完美反相地绕质心转（θB = θA + π），再经
+     * tilt 倾斜与星环共面（环双星）。模型矩阵只有平移 + 均匀缩放，星体自身不转。 */
+    const th = t * this.BINARY_W;
+    const ct = Math.cos(th), st = Math.sin(th);
+    const starPose = (s, sign) => {
+      const x = sign * ct * s.orbitR, z = sign * st * s.orbitR;
+      // tilt(rotZ) 作用到位置向量（列主序，y=0 分量略）：px = cosT·x，py = sinT·x，pz = z
+      const px = tilt[0] * x, py = tilt[1] * x, pz = z;
+      const r = s.radius * breathe;
+      return {
+        pos: [px, py, pz],
+        model: new Float32Array([r, 0, 0, 0, 0, r, 0, 0, 0, 0, r, 0, px, py, pz, 1]),
+        bright: 1 + 0.3 * pulse + 0.06 * Math.sin(t * 1.7 + s.twPhase),
+      };
+    };
+    const pair = [[starPose(this.STAR_A, 1), this.STAR_A], [starPose(this.STAR_B, -1), this.STAR_B]];
 
     /* --- 星幕（先画，不写深度） --- */
     gl.disable(gl.DEPTH_TEST);
@@ -1140,22 +1082,20 @@ const SaturnSky = {
     gl.uniform1f(this.starProg.u.uScale, 300 * pxScale);
     gl.drawArrays(gl.POINTS, 0, this.STAR_COUNT);
 
-    /* --- 行星本体（不透明，写深度，好让环从它背后穿过去） --- */
+    /* --- 双星本体（不透明，写深度，好让环从它们背后穿过去） --- */
     gl.enable(gl.DEPTH_TEST);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
-    this.use(this.planetProg, this.sphereBuf, [["aPos", 3, 0], ["aNor", 3, 3], ["aUv", 2, 6]], 8);
+    this.use(this.starBodyProg, this.sphereBuf, [["aPos", 3, 0], ["aNor", 3, 3]], 8);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.sphereIdx);
-    gl.uniformMatrix4fv(this.planetProg.u.uProj, false, proj);
-    gl.uniformMatrix4fv(this.planetProg.u.uView, false, view);
-    gl.uniformMatrix4fv(this.planetProg.u.uModel, false, planetModel);
-    gl.uniformMatrix3fv(this.planetProg.u.uNormalMat, false, normalMat);
-    gl.uniform3fv(this.planetProg.u.uEye, eye);
-    gl.uniform1f(this.planetProg.u.uExposure, 0.82 * (1 + 0.3 * pulse)); // 背景层压一点曝光；脉冲时提亮
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.uniform1i(this.planetProg.u.uTex, 0);
-    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_SHORT, 0);
+    gl.uniformMatrix4fv(this.starBodyProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.starBodyProg.u.uView, false, view);
+    for (const [pose, s] of pair) {
+      gl.uniformMatrix4fv(this.starBodyProg.u.uModel, false, pose.model);
+      gl.uniform3fv(this.starBodyProg.u.uCore, s.core);
+      gl.uniform1f(this.starBodyProg.u.uBright, pose.bright);
+      gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_SHORT, 0);
+    }
 
     /* --- 光环（加法混合，测深度但不写深度） --- */
     gl.depthMask(false);
@@ -1174,29 +1114,35 @@ const SaturnSky = {
     gl.uniform3f(this.ringProg.u.uColor, 0.88, 0.8, 0.62);
     gl.drawArrays(gl.POINTS, 0, this.RING_COUNT);
 
-    /* --- 大气辉光（脉冲时光晕涨一点） --- */
-    this.use(this.haloProg, this.haloBuf, [["aQuad", 2, 0]], 2);
-    gl.uniformMatrix4fv(this.haloProg.u.uProj, false, proj);
-    gl.uniformMatrix4fv(this.haloProg.u.uView, false, view);
-    gl.uniform2f(this.haloProg.u.uSize, 26 * (1 + 0.3 * pulse), 23 * (1 + 0.3 * pulse));
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    /* --- 星辉（加法混合，关深度测试：星心烧成亮核，脉冲时涨大） --- */
+    gl.disable(gl.DEPTH_TEST);
+    this.use(this.glowProg, this.glowBuf, [["aQuad", 2, 0]], 2);
+    gl.uniformMatrix4fv(this.glowProg.u.uProj, false, proj);
+    gl.uniformMatrix4fv(this.glowProg.u.uView, false, view);
+    for (const [pose, s] of pair) {
+      const g = s.radius * 1.8 * (1 + 0.3 * pulse);
+      gl.uniform3fv(this.glowProg.u.uCenter, pose.pos);
+      gl.uniform2f(this.glowProg.u.uSize, g, g);
+      gl.uniform3fv(this.glowProg.u.uColor, s.glow);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
   },
 };
 
-/* ---------- 星河漫游：土星环上的照片 ----------
- * 照片挂在一条与土星粒子环同心、共面（同 26.7° 转轴倾角）的外侧轨道上，
- * 像环上的卫星一样绕土星公转：左右拖 = 拨动星环（粒子环经 ringProg 的
+/* ---------- 星河漫游：双星环上的照片 ----------
+ * 照片挂在一条与双星粒子环同心、共面（同 26.7° 转轴倾角）的外侧轨道上，
+ * 像环上的卫星一样绕双星公转：左右拖 = 拨动星环（粒子环经 ringProg 的
  * uSpin = φ 同步跟随，自身仍保留开普勒差速自转），上下拖 = 相机仰角
- * （松手保持不弹回），滚轮/双指 = 推拉远近；土星始终屏幕居中。
+ * （松手保持不弹回），滚轮/双指 = 推拉远近；双星质心始终屏幕居中。
  *
  * 同时在环上的照片数量有限（设置面板「照片数量」可调，默认 48）：总数超出时，
  * 照片转到离镜头最远的弧点就淡出并接力换成下一张（recycle，tail +1 保证
  * 不重复、遍历全相册），在途缩略图始终只有一小批，不会一次性拉动整个相册的下载。
  *
  * 两层对齐（本页的地基，改相机前先读）：
- * 照片是 CSS 3D，土星是 WebGL，两层共用一台相机——每帧由 Galaxy 算出
+ * 照片是 CSS 3D，双星是 WebGL，两层共用一台相机——每帧由 Galaxy 算出
  * 机位（az 缓慢公转 + elev/zoom），经 SaturnSky.eyeFrom / lookAt 得
- * view 矩阵：一份传给 SaturnSky.render 画土星，一份用来摆照片。
+ * view 矩阵：一份传给 SaturnSky.render 画双星，一份用来摆照片。
  * CSS 侧取 perspective P = (stageH/2)/tan(22.5°)，与 WebGL fovy=45°
  * 精确等价。关键是摆法：CSS 合成器对 translate3d(x, y, z) 整体再做一次
  * P/(P−z) 投影缩放，所以 x/y 必须直接摆 view 空间坐标（乘 px 换算 kPx）、
@@ -1205,13 +1151,14 @@ const SaturnSky = {
  * 「帮」它投影，会被合成器二次缩放：照片环整体往中心塌、越远塌得越狠，
  * 与粒子环明显错开（曾经的 bug，数值验证：旧方案偏差最多 706px，新方案 0）。
  * 元素不旋转即正对镜头，因为 view 空间里相机永远朝 −z 看。
- * 照片转到土星背后时被行星「掩食」：按屏幕距离平滑淡出（rS = 21·P/d）。
- * 右上角设置面板（ModeSettings）能调五样：星环自转速度 / 行星大小 / 照片大小 /
+ * 照片转到双星背后时被「掩食」：按屏幕距离平滑淡出（rS = 17·P/d，
+ * PLANET_R 罩住双星活动区：轨道 10.5 + 星体 6 + 一点余量）。
+ * 右上角设置面板（ModeSettings）能调五样：星环自转速度 / 双星大小 / 照片大小 /
  * 照片数量 / 环绕半径。 */
 const Galaxy = {
-  TILT: SaturnSky.TILT, // 与土星转轴倾角一致：照片环与粒子环共面
+  TILT: SaturnSky.TILT, // 与双星转轴倾角一致：照片环与粒子环共面
   ORBIT_W: 69,          // 照片轨道半径（世界单位，「环绕半径」设置的当前值，初值=DEF_ORBIT）
-  PLANET_R: 21,         // 掩食/点按判定用的行星视半径（本体 20 + 一点余量）
+  PLANET_R: 17,         // 掩食/点按判定用的中央视半径（双星活动区 16.5 + 一点余量）
   ELEV_DEF: 0.36,       // 相机仰角默认值（rad）
   ELEV_MIN: 0.08,
   ELEV_MAX: 1.15,
@@ -1221,7 +1168,7 @@ const Galaxy = {
   /* ----- 设置面板各项：默认值 + 滑条范围（存 localStorage，见 loadCfg） ----- */
   DEF_SPEED: 0.02,      // 星环自转默认速度（度/帧；整圈约 5 分钟）
   SPEED_MAX: 0.08,
-  DEF_PLANET: 1.8,      // 行星大小：等比例缩放土星（含星环），直接作用在 SaturnSky.scale
+  DEF_PLANET: 1.8,      // 双星大小：等比例缩放双星（含星环），直接作用在 SaturnSky.scale
   PLANET_MIN: 0.5,
   PLANET_MAX: 3.0,
   DEF_SIZE: 1.5,        // 照片大小（基准卡宽的倍数）
@@ -1234,10 +1181,10 @@ const Galaxy = {
   ORBIT_MIN: 64,        // 粒子环外沿 58 之外，至少留一道缝
   ORBIT_MAX: 130,
   ORBIT_REF: 80,        // 「环绕半径」滑条的百分比显示基准（100% = 原默认 80）
-  AUTO_AZ: 0.018,       // 机位绕土星的缓慢公转（rad/s），与 saturn.html 的 autoRotate 同量级
+  AUTO_AZ: 0.018,       // 机位绕双星的缓慢公转（rad/s），与 saturn.html 的 autoRotate 同量级
   NEAR_SCALE: 0.68,     // 照片转到离镜头最近点时的屏显尺寸 = 卡片 px 尺寸 × 此值（layout 用它反推 kPx）
   VIEWS: {              // 视角预设（右下角胶囊按钮；双击空白处复位）
-    far:  { zoom: 2.3,  elev: 0.62 },  // 远景：整条光环 + 中央小土星
+    far:  { zoom: 2.3,  elev: 0.62 },  // 远景：整条光环 + 中央双星
     ring: { zoom: 1.05, elev: 0.10 },  // 环面：贴着环面看照片列队掠过
     near: { zoom: 0.78, elev: 0.32 },  // 近观：照片从身边飞过
   },
@@ -1245,7 +1192,7 @@ const Galaxy = {
   phi: 0,               // 星环自转角（rad，同时喂给粒子环的 uSpin）
   phiVel: 0,            // 拖动惯性（rad/帧）
   elev: 0, zoom: 0,     // 当前仰角 / 距离倍率（拖拽后保持）
-  pulse: 0,             // 土星心跳脉冲（0..1，随帧衰减）
+  pulse: 0,             // 双星心跳脉冲（0..1，随帧衰减）
   items: [],            // { el, img, cap, photoIdx, theta, r, yJ, ready, op, br, sc, lastDepth, prevRel, lastSwap }
   tail: -1,             // 环上最新一张的 photoIdx；回收时 +1 接力
   recycling: false,     // 总数 > 在环数量（cfg.count）时才回收
@@ -1273,7 +1220,7 @@ const Galaxy = {
     this.stage = $("#galaxyStage");
     this.space = $("#galaxySpace");
     this.buildPhotos();
-    // 背景星幕（土星那层等首次进入时再建，见 enter）
+    // 背景星幕（双星那层等首次进入时再建，见 enter）
     this.initStarfield();
     this.bindInput();
     addEventListener("resize", () => this.layout());
@@ -1404,7 +1351,7 @@ const Galaxy = {
     const P = (H / 2) / Math.tan(Math.PI / 8);
     const kPx = this.kPx;
     const cosT = Math.cos(this.TILT), sinT = Math.sin(this.TILT);
-    const rS = (this.PLANET_R * P) / d; // 土星的屏幕视半径（掩食判定用）
+    const rS = (this.PLANET_R * P) / d; // 双星活动区的屏幕视半径（掩食判定用）
     const nearDepth = (d - this.ORBIT_W) * kPx;
     // 环坐标下离镜头最远的角（含倾角与仰角修正）：回收换图在这里发生
     const cosE = Math.cos(this.elev);
@@ -1450,7 +1397,7 @@ const Galaxy = {
       let brT = 1.02 - 0.55 * depthK;
       // 未加载完成（含回收换图途中）的不现身（op 从 0 缓动淡入）
       let opT = it.ready ? 1 : 0;
-      // 掩食：在行星背后（与相机异侧）且落入行星视圆盘 → 平滑淡出
+      // 掩食：在双星背后（与相机异侧）且落入中央视圆盘 → 平滑淡出
       if (opT && wx * eye[0] + wy * eye[1] + wz0 * eye[2] < 0) {
         opT = Math.max(0, Math.min(1, (Math.hypot(sx, sy) - rS) / (0.3 * rS)));
       }
@@ -1492,7 +1439,7 @@ const Galaxy = {
     // 左键 / 触屏点按：先命中照片看大图（手动矩形命中——Chromium 的
     // preserve-3d 命中检测打不到位于 stage 背景平面之后的照片；若浏览器
     // 正常命中了照片自身，closest 检查会跳过这里，不会重复打开），
-    // 没点中照片再看是不是点了土星：心跳脉冲。
+    // 没点中照片再看是不是点了双星：心跳脉冲。
     this.stage.addEventListener("click", (e) => {
       if (e.button !== 0 || this.track.moved) return;
       if (performance.now() < this.suppressClickUntil) return;
@@ -1611,7 +1558,7 @@ const Galaxy = {
     this.hovered = it;
     if (it) it.el.classList.add("hovered");
   },
-  // 点了土星：心跳脉冲（行星轻轻提亮、呼吸一下）
+  // 点了双星：心跳脉冲（两颗星一起提亮、呼吸一下）
   poke() {
     this.pulse = 1;
   },
@@ -1628,7 +1575,7 @@ const Galaxy = {
     };
   },
   resetView() { this.flyTo({ elev: this.ELEV_DEF, zoom: this.ZOOM_DEF }, 1.1); },
-  // 最远弧点回收：该处照片最小最暗（还时常被土星掩食），淡出换图最不显眼。
+  // 最远弧点回收：该处照片最小最暗（还时常被双星掩食），淡出换图最不显眼。
   // tail 接力 +1，环上照片互不重复、持续遍历整个相册
   recycle(it) {
     it.lastSwap = performance.now();
@@ -1693,7 +1640,7 @@ const Galaxy = {
 
   /* ----- 背景：星幕 canvas -----
    * 星星固定在世界空间的球壳上（半径 600–1100，与 WebGL 星幕 800–1200 交错），
-   * 每帧用与照片、土星同一台的相机做投影，视差天然一致；带闪烁与少量星芒。 */
+   * 每帧用与照片、双星同一台的相机做投影，视差天然一致；带闪烁与少量星芒。 */
   initStarfield() {
     const cv = el("canvas");
     cv.id = "galaxyStars";
@@ -1789,7 +1736,7 @@ const Galaxy = {
 
   enter() {
     // 相机几何（perspective / 环半径 / 星幕）要等页面真正显示出来才量得到
-    // 尺寸，所以放在这里重排；土星那层同理，首次进入时才初始化
+    // 尺寸，所以放在这里重排；双星那层同理，首次进入时才初始化
     this.layout();
     if (!this.skyTried) {
       this.skyTried = true;
@@ -2057,7 +2004,7 @@ function initMusic() {
  * 子页面加设置再登记一项即可；没有登记的子页面会直接隐藏 ⚙ 按钮。
  * 目前有两页：
  *   3D 相册（ring）：旋转速度 + 图片大小 + 镜头远近；
- *   星河漫游（galaxy）：星环自转速度 + 行星大小 + 照片大小。
+ *   星河漫游（galaxy）：星环自转速度 + 双星大小 + 照片大小。
  * 每次拖动即时生效并存 localStorage，可一键恢复默认值。 */
 const ModeSettings = {
   defs: {
@@ -2100,7 +2047,7 @@ const ModeSettings = {
           fmt: (v) => Math.round((v / Galaxy.DEF_SPEED) * 100) + "%",
         },
         {
-          label: "行星大小",
+          label: "双星大小",
           min: Galaxy.PLANET_MIN, max: Galaxy.PLANET_MAX, step: 0.05,
           get: () => Galaxy.cfg.planet,
           set: (v) => Galaxy.setPlanet(v),
