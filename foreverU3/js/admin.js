@@ -21,6 +21,7 @@ const state = {
   currentPhotoIndex: 0,
   committing: false,
   pendingCommit: null,
+  useRepositoryPreviews: false,
 };
 
 /* ---------- 日志 ---------- */
@@ -148,7 +149,7 @@ function normalizePhotoName(value, currentSrc) {
 
 function photoPreviewSrc(photo) {
   const src = state.originalSources.get(photo) || photo.src;
-  if (!state.owner || !state.repo) return src;
+  if (!state.useRepositoryPreviews || !state.owner || !state.repo) return src;
   const path = `${state.prefix}${src}`.split("/").map(encodeURIComponent).join("/");
   return `https://raw.githubusercontent.com/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/${encodeURIComponent(state.branch)}/${path}`;
 }
@@ -453,6 +454,7 @@ async function commitAll(withImages) {
     state.deletions.clear();
     state.deletionHistory = [];
     state.originalSources = new Map((manifest.photos || []).map((photo) => [photo, photo.src]));
+    state.useRepositoryPreviews = true;
     renderPending();
     renderPhotoList();
     $("#uploadCard").hidden = true;
