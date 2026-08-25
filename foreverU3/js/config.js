@@ -43,7 +43,7 @@ const SITE_CONFIG = {
     { date: "05-20", title: "520 告白日" },
   ],
 
-  // 背景音乐：四首歌连续循环，曲目表在 js/music.js
+  // 背景音乐：五首歌连续循环，曲目表在 js/music.js
   music: {
     enabled: true,
     volume: 0.5, // 0 ~ 1

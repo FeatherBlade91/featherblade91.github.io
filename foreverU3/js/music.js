@@ -7,6 +7,7 @@ const MusicBox = (() => {
     { title: "Free Loop", artist: "Daniel Powter", src: "music/Daniel Powter - Free Loop (1).mp3" },
     { title: "Fuerteventura", artist: "Russian Red", src: "music/Russian Red - Fuerteventura.mp3" },
     { title: "我的名字", artist: "焦迈奇", src: "music/焦迈奇 - 我的名字.mp3" },
+    { title: "真っ白", artist: "藤井風", src: "music/藤井風 - 真っ白.mp3" },
   ];
 
   let audio = null;
