@@ -2042,17 +2042,14 @@ function initLetter() {
   });
 }
 
-/* ---------- 音乐开关 ---------- */
+/* ---------- 音乐播放器 ---------- */
 function initMusic() {
   const btn = $("#musicToggle");
   if (!SITE_CONFIG.music || !SITE_CONFIG.music.enabled) {
     btn.style.display = "none";
     return;
   }
-  btn.addEventListener("click", () => {
-    const on = MusicBox.toggle();
-    btn.classList.toggle("playing", on);
-  });
+  MusicBox.init();
 }
 
 /* ---------- 右上角「本页设置」面板 ----------

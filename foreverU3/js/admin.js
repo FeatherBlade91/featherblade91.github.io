@@ -15,9 +15,12 @@ const state = {
   prefix: "",               // 仓库内子目录前缀，如 "foreverU3/"
   manifest: { photos: [] }, // 当前线上的 photos.json 内容
   pending: [],              // 待上传 { file, dataUrl, date, caption }
-  deletions: new Set(),     // 标记删除的 src
+  deletions: new Set(),     // 标记移入回收站的照片对象
+  deletionHistory: [],
+  originalSources: new Map(),
   currentPhotoIndex: 0,
   committing: false,
+  pendingCommit: null,
 };
 
 /* ---------- 日志 ---------- */
@@ -56,29 +59,50 @@ async function connect() {
   const pp = (SITE_CONFIG.repo && SITE_CONFIG.repo.pathPrefix) || "";
   state.prefix = pp ? pp.replace(/\/*$/, "/") : "";
   if (!state.owner || !state.repo || !state.token) {
-    log("未读取到本机 GitHub 登录凭据，请先启动 tools/local_server.py 并确认 gh 已登录", "err");
+    $("#tokenStatus").textContent = "请填写 GitHub Token";
+    $("#inToken").focus();
     return;
   }
   log(`正在连接 ${state.owner}/${state.repo} ...`);
   try {
-    const data = await gh(`/contents/${state.prefix}photos.json?ref=${state.branch}`).catch((e) => {
-      if (String(e.message).includes("404")) return null;
-      throw e;
-    });
-    if (data) {
-      const text = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ""))));
-      state.manifest = JSON.parse(text);
-      log(`连接成功，线上已有 ${(state.manifest.photos || []).length} 张照片`, "ok");
-    } else {
-      state.manifest = { photos: [] };
-      log("连接成功，仓库里还没有 photos.json，首次提交时会自动创建", "ok");
-    }
-    $("#uploadCard").hidden = false;
-    $("#listCard").hidden = false;
-    renderPhotoList();
+    await gh(`/git/ref/heads/${state.branch}`);
+    if ($("#chkSaveToken").checked) localStorage.setItem("albumAdminToken", state.token);
+    else localStorage.removeItem("albumAdminToken");
+    $("#tokenStatus").textContent = "✓ 已连接";
+    $("#authModal").hidden = true;
+    log("GitHub 连接成功", "ok");
+    const pendingCommit = state.pendingCommit;
+    state.pendingCommit = null;
+    if (pendingCommit !== null) await commitAll(pendingCommit);
   } catch (e) {
+    $("#tokenStatus").textContent = "连接失败，请检查 Token 权限";
     log("连接失败：" + e.message, "err");
   }
+}
+
+async function loadPublicManifest() {
+  const cfg = (typeof SITE_CONFIG !== "undefined" && SITE_CONFIG.repo) || {};
+  state.owner = cfg.owner || "";
+  state.repo = cfg.name || "";
+  state.branch = cfg.branch || "main";
+  const pp = cfg.pathPrefix || "";
+  state.prefix = pp ? pp.replace(/\/*$/, "/") : "";
+  try {
+    const response = await fetch(`photos.json?v=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    state.manifest = await response.json();
+    state.originalSources = new Map((state.manifest.photos || []).map((photo) => [photo, photo.src]));
+    renderPhotoList();
+  } catch (error) {
+    $("#reviewLoader").textContent = "相册读取失败";
+    $("#editorStatus").textContent = error.message;
+  }
+}
+
+function openAuth(pendingCommit = null) {
+  state.pendingCommit = pendingCommit;
+  $("#authModal").hidden = false;
+  requestAnimationFrame(() => $("#inToken").focus());
 }
 
 function compactDate(date) {
@@ -99,6 +123,63 @@ function canonicalDate(value) {
   return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
 }
 
+function fileNameFromSrc(src) {
+  return String(src || "").split("/").pop() || "";
+}
+
+function normalizePhotoName(value, currentSrc) {
+  let name = String(value || "").trim();
+  if (!name) throw new Error("文件名不能为空");
+  if (!/\.[a-z0-9]+$/i.test(name)) {
+    const extension = fileNameFromSrc(currentSrc).match(/(\.[^.]+)$/);
+    if (extension) name += extension[1];
+  }
+  if (name === "." || name === ".." || /[\\/:*?"<>|\u0000-\u001f]/.test(name)) {
+    throw new Error("文件名含有无效字符");
+  }
+  if (!/\.(jpe?g|png|webp|gif|svg)$/i.test(name)) {
+    throw new Error("请保留图片扩展名（jpg、png、webp、gif 或 svg）");
+  }
+  const oldExtension = fileNameFromSrc(currentSrc).match(/\.[^.]+$/)?.[0].toLowerCase();
+  const newExtension = name.match(/\.[^.]+$/)?.[0].toLowerCase();
+  if (oldExtension && newExtension !== oldExtension) throw new Error("改名时不能更改图片扩展名");
+  return name;
+}
+
+function photoPreviewSrc(photo) {
+  const src = state.originalSources.get(photo) || photo.src;
+  if (!state.owner || !state.repo) return src;
+  const path = `${state.prefix}${src}`.split("/").map(encodeURIComponent).join("/");
+  return `https://raw.githubusercontent.com/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/${encodeURIComponent(state.branch)}/${path}`;
+}
+
+function markForTrash(photo) {
+  if (!photo || state.deletions.has(photo)) return;
+  state.deletions.add(photo);
+  state.deletionHistory.push(photo);
+}
+
+function restorePhoto(photo) {
+  state.deletions.delete(photo);
+  state.deletionHistory = state.deletionHistory.filter((item) => item !== photo);
+}
+
+function undoTrash() {
+  try { syncEditorToPhoto(); }
+  catch (e) {
+    $("#editorStatus").textContent = e.message;
+    return;
+  }
+  while (state.deletionHistory.length) {
+    const photo = state.deletionHistory.pop();
+    if (!state.deletions.has(photo)) continue;
+    state.deletions.delete(photo);
+    renderPhotoList();
+    $("#editorStatus").textContent = `已恢复 ${fileNameFromSrc(photo.src)}`;
+    return;
+  }
+}
+
 function selectPhoto(index, focus) {
   const photos = state.manifest.photos || [];
   if (!photos.length) return;
@@ -114,17 +195,23 @@ function renderPhotoEditor(focus) {
   const editor = $("#photoEditor");
   if (!photos.length) {
     editor.hidden = true;
+    $("#reviewEmpty").hidden = false;
     return;
   }
   state.currentPhotoIndex = Math.min(state.currentPhotoIndex, photos.length - 1);
   const p = photos[state.currentPhotoIndex];
   editor.hidden = false;
-  $("#editorCounter").textContent = `${state.currentPhotoIndex + 1} / ${photos.length}`;
-  $("#editorImage").src = p.src;
+  $("#reviewEmpty").hidden = true;
+  $("#editorCounter").textContent = `${String(state.currentPhotoIndex + 1).padStart(3, "0")} / ${String(photos.length).padStart(3, "0")}`;
+  $("#editorImage").classList.remove("ready");
+  $("#reviewLoader").hidden = false;
+  $("#editorImage").src = photoPreviewSrc(p);
+  $("#editorName").value = fileNameFromSrc(p.src);
   $("#editorCaption").value = p.caption || "";
   $("#editorDate").value = compactDate(p.date);
   $("#editorFilename").textContent = p.src;
-  $("#editorStatus").textContent = state.deletions.has(p.src) ? "已标记删除" : "";
+  $("#editorStatus").textContent = state.deletions.has(p) ? "保存后移入回收站" : "";
+  $("#btnTrashCurrent").textContent = state.deletions.has(p) ? "撤销回收" : "移入回收站";
   if (focus) requestAnimationFrame(() => $(focus).focus());
 }
 
@@ -132,6 +219,7 @@ function syncEditorToPhoto() {
   const photos = state.manifest.photos || [];
   const p = photos[state.currentPhotoIndex];
   if (!p) return;
+  p.src = `photos/${normalizePhotoName($("#editorName").value, state.originalSources.get(p) || p.src)}`;
   p.caption = $("#editorCaption").value.trim();
   p.date = canonicalDate($("#editorDate").value);
 }
@@ -141,7 +229,11 @@ async function saveCurrentPhoto() {
     syncEditorToPhoto();
   } catch (e) {
     $("#editorStatus").textContent = e.message;
-    $("#editorDate").focus();
+    (e.message.includes("日期") ? $("#editorDate") : $("#editorName")).focus();
+    return;
+  }
+  if (!state.token) {
+    openAuth(false);
     return;
   }
   await commitAll(false);
@@ -149,69 +241,11 @@ async function saveCurrentPhoto() {
 
 /* ---------- 现有照片列表 ---------- */
 function renderPhotoList() {
-  const box = $("#photoList");
-  box.innerHTML = "";
   const photos = state.manifest.photos || [];
   if (!photos.length) {
-    box.innerHTML = '<p class="hint">还没有照片，先上传第一张吧。</p>';
     renderPhotoEditor();
     return;
   }
-  photos.forEach((p, i) => {
-    const row = el("div", "photo-row");
-    row.classList.toggle("active", i === state.currentPhotoIndex);
-    row.addEventListener("click", (e) => {
-      if (e.target.closest("input,button")) return;
-      selectPhoto(i);
-    });
-    if (state.deletions.has(p.src)) row.classList.add("deleted");
-    const img = el("img");
-    img.src = p.src;
-    img.loading = "lazy";
-    row.appendChild(img);
-
-    const fields = el("div", "pv-fields");
-    const capIn = el("input");
-    capIn.type = "text";
-    capIn.placeholder = "名称 / 文案…";
-    capIn.value = p.caption || "";
-    capIn.addEventListener("input", () => {
-      p.caption = capIn.value;
-      if (i === state.currentPhotoIndex && document.activeElement !== $("#editorCaption")) {
-        $("#editorCaption").value = p.caption;
-      }
-    });
-    const dateIn = el("input");
-    dateIn.type = "text";
-    dateIn.inputMode = "numeric";
-    dateIn.maxLength = 8;
-    dateIn.placeholder = "YYYYMMDD";
-    dateIn.value = compactDate(p.date);
-    dateIn.addEventListener("change", () => {
-      try {
-        p.date = canonicalDate(dateIn.value);
-        dateIn.value = compactDate(p.date);
-        if (i === state.currentPhotoIndex && document.activeElement !== $("#editorDate")) {
-          $("#editorDate").value = compactDate(p.date);
-        }
-        dateIn.setCustomValidity("");
-      }
-      catch (e) { dateIn.setCustomValidity(e.message); dateIn.reportValidity(); }
-    });
-    fields.appendChild(capIn);
-    fields.appendChild(dateIn);
-    row.appendChild(fields);
-
-    const del = el("button", "row-del" + (state.deletions.has(p.src) ? " undo" : ""));
-    del.textContent = state.deletions.has(p.src) ? "恢复" : "删除";
-    del.addEventListener("click", () => {
-      if (state.deletions.has(p.src)) state.deletions.delete(p.src);
-      else state.deletions.add(p.src);
-      renderPhotoList();
-    });
-    row.appendChild(del);
-    box.appendChild(row);
-  });
   renderPhotoEditor();
 }
 
@@ -259,23 +293,55 @@ function renderPending() {
     row.appendChild(rm);
     box.appendChild(row);
   });
-  $("#btnUpload").disabled = !state.pending.length && !state.deletions.size;
+  $("#btnUpload").disabled = !state.pending.length;
+}
+
+function thumbPath(src) {
+  return String(src).replace(/^photos\//, "thumbs/");
+}
+
+function repositoryPath(src) {
+  return `${state.prefix}${src}`;
+}
+
+function setTreeEntry(entries, path, entry) {
+  entries.set(path, { path, mode: "100644", type: "blob", ...entry });
+}
+
+function validateDestinations(photos) {
+  const destinations = new Set();
+  for (const photo of photos) {
+    if (state.deletions.has(photo)) continue;
+    const normalized = `photos/${normalizePhotoName(fileNameFromSrc(photo.src), photo.src)}`;
+    if (destinations.has(normalized)) throw new Error(`文件名重复：${fileNameFromSrc(normalized)}`);
+    destinations.add(normalized);
+    photo.src = normalized;
+  }
 }
 
 /* ---------- 提交：一次 commit 包含新图片 + 更新后的 photos.json ---------- */
 async function commitAll(withImages) {
-  const btn = withImages ? $("#btnUpload") : $("#btnSaveManifest");
   if (state.committing) return;
-  if (!withImages && (state.manifest.photos || []).length) {
+  if (!state.token) {
+    openAuth(withImages);
+    return;
+  }
+  if ((state.manifest.photos || []).length) {
     try { syncEditorToPhoto(); }
     catch (e) {
       $("#editorStatus").textContent = e.message;
-      $("#editorDate").focus();
+      (e.message.includes("日期") ? $("#editorDate") : $("#editorName")).focus();
       return;
     }
   }
+  try { validateDestinations(state.manifest.photos || []); }
+  catch (e) {
+    $("#editorStatus").textContent = e.message;
+    return;
+  }
   state.committing = true;
-  btn.disabled = true;
+  const saveButtons = [$("#btnUpload"), $("#btnSaveManifest"), $("#btnSaveCurrent")];
+  saveButtons.forEach((button) => { button.disabled = true; });
   try {
     log("读取分支引用…");
     const ref = await gh(`/git/ref/heads/${state.branch}`);
@@ -283,7 +349,26 @@ async function commitAll(withImages) {
     const commit = await gh(`/git/commits/${baseCommit}`);
     const baseTree = commit.tree.sha;
 
-    const tree = [];
+    const baseTreeData = await gh(`/git/trees/${baseTree}?recursive=1`);
+    if (baseTreeData.truncated) throw new Error("仓库文件列表过大，无法安全执行改名或回收站操作");
+    const blobs = new Map((baseTreeData.tree || [])
+      .filter((entry) => entry.type === "blob")
+      .map((entry) => [entry.path, entry.sha]));
+    const treeEntries = new Map();
+    const managedPaths = new Set();
+    for (const photo of state.manifest.photos || []) {
+      const originalSrc = state.originalSources.get(photo) || photo.src;
+      managedPaths.add(repositoryPath(originalSrc));
+      managedPaths.add(repositoryPath(thumbPath(originalSrc)));
+    }
+    for (const photo of state.manifest.photos || []) {
+      if (state.deletions.has(photo)) continue;
+      for (const target of [repositoryPath(photo.src), repositoryPath(thumbPath(photo.src))]) {
+        if (blobs.has(target) && !managedPaths.has(target)) {
+          throw new Error(`目标文件已存在：${target.replace(state.prefix, "")}`);
+        }
+      }
+    }
 
     // 1. 上传新图片 blob
     const newEntries = [];
@@ -296,30 +381,64 @@ async function commitAll(withImages) {
       });
       const safe = item.file.name.replace(/[^\w.\-]/g, "_");
       const path = `${state.prefix}photos/${Date.now()}-${newEntries.length}-${safe}`;
-      tree.push({ path, mode: "100644", type: "blob", sha: blob.sha });
+      setTreeEntry(treeEntries, path, { sha: blob.sha });
       newEntries.push({ src: path.replace(new RegExp("^" + state.prefix), ""), date: item.date, caption: item.caption });
     }
 
-    // 2. 合成新的 photos.json
-    const kept = (state.manifest.photos || []).filter((p) => !state.deletions.has(p.src));
-    const manifest = { photos: kept.concat(newEntries) };
+    // 2. 改名与删除都迁移已有 blob；删除项进入仓库 trash/ 文件夹。
+    const trashStamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const moves = [];
+    for (const [index, photo] of (state.manifest.photos || []).entries()) {
+      const oldSrc = state.originalSources.get(photo) || photo.src;
+      const oldPaths = [oldSrc, thumbPath(oldSrc)];
+      if (state.deletions.has(photo)) {
+        for (const oldPath of oldPaths) {
+          const oldRepoPath = repositoryPath(oldPath);
+          const sha = blobs.get(oldRepoPath);
+          if (!sha) {
+            if (oldPath === oldSrc) throw new Error(`仓库中找不到原图，无法移入回收站：${oldSrc}`);
+            continue;
+          }
+          const kind = oldPath.startsWith("thumbs/") ? "thumbs" : "photos";
+          const trashPath = `${state.prefix}trash/${kind}/${trashStamp}-${index}-${fileNameFromSrc(oldPath)}`;
+          moves.push({ oldRepoPath, newRepoPath: trashPath, sha });
+        }
+        continue;
+      }
+      if (photo.src === oldSrc) continue;
+      const newPaths = [photo.src, thumbPath(photo.src)];
+      for (let pathIndex = 0; pathIndex < oldPaths.length; pathIndex++) {
+        const oldRepoPath = repositoryPath(oldPaths[pathIndex]);
+        const sha = blobs.get(oldRepoPath);
+        if (!sha) {
+          if (pathIndex === 0) throw new Error(`仓库中找不到原图：${oldPaths[pathIndex]}`);
+          continue;
+        }
+        moves.push({ oldRepoPath, newRepoPath: repositoryPath(newPaths[pathIndex]), sha });
+      }
+    }
+    for (const move of moves) setTreeEntry(treeEntries, move.oldRepoPath, { sha: null });
+    for (const move of moves) setTreeEntry(treeEntries, move.newRepoPath, { sha: move.sha });
+
+    // 3. 合成新的 photos.json
+    const kept = (state.manifest.photos || []).filter((photo) => !state.deletions.has(photo));
+    const manifest = { photos: kept.map((photo) => ({ ...photo })).concat(newEntries) };
     log("更新 photos.json…");
-    tree.push({
-      path: `${state.prefix}photos.json`,
-      mode: "100644",
-      type: "blob",
+    setTreeEntry(treeEntries, `${state.prefix}photos.json`, {
       content: JSON.stringify(manifest, null, 2),
     });
 
-    // 3. 新 tree → commit → 更新 ref
+    // 4. 新 tree → commit → 更新 ref
     log("创建提交…");
     const newTree = await gh("/git/trees", {
       method: "POST",
-      body: JSON.stringify({ base_tree: baseTree, tree }),
+      body: JSON.stringify({ base_tree: baseTree, tree: [...treeEntries.values()] }),
     });
     const msg = newEntries.length
       ? `💌 上传 ${newEntries.length} 张新照片`
-      : `📝 更新相册清单`;
+      : state.deletions.size
+        ? `🗑️ 整理相册并移入回收站`
+        : `📝 更新相册名称与日期`;
     const newCommit = await gh("/git/commits", {
       method: "POST",
       body: JSON.stringify({ message: msg, tree: newTree.sha, parents: [baseCommit] }),
@@ -332,20 +451,25 @@ async function commitAll(withImages) {
     state.manifest = manifest;
     state.pending = [];
     state.deletions.clear();
+    state.deletionHistory = [];
+    state.originalSources = new Map((manifest.photos || []).map((photo) => [photo, photo.src]));
     renderPending();
     renderPhotoList();
+    $("#uploadCard").hidden = true;
     log(`✅ 提交成功！GitHub Pages 会在 1~2 分钟后更新线上相册。`, "ok");
   } catch (e) {
     log("提交失败：" + e.message, "err");
   } finally {
     state.committing = false;
-    btn.disabled = false;
+    saveButtons.forEach((button) => { button.disabled = false; });
+    $("#btnUpload").disabled = !state.pending.length;
   }
 }
 
 /* ---------- 背景泡泡（简化版） ---------- */
 function initBubbles() {
   const box = $("#bubbles");
+  if (!box) return;
   for (let i = 0; i < 16; i++) {
     const b = el("span", "bubble");
     const size = 12 + Math.random() * 60;
@@ -360,6 +484,17 @@ function initBubbles() {
 }
 
 function initPhotoEditor() {
+  $("#editorImage").addEventListener("load", () => {
+    $("#reviewLoader").hidden = true;
+    $("#editorImage").classList.add("ready");
+  });
+  $("#editorImage").addEventListener("error", () => {
+    $("#reviewLoader").hidden = false;
+    $("#reviewLoader").textContent = "图片读取失败";
+  });
+  $("#editorName").addEventListener("input", () => {
+    $("#editorStatus").textContent = "尚未保存";
+  });
   $("#editorCaption").addEventListener("input", () => {
     const p = (state.manifest.photos || [])[state.currentPhotoIndex];
     if (p) p.caption = $("#editorCaption").value;
@@ -387,13 +522,21 @@ function initPhotoEditor() {
   });
   $("#btnPrevPhoto").addEventListener("click", () => {
     try { syncEditorToPhoto(); } catch (e) { $("#editorStatus").textContent = e.message; return; }
-    selectPhoto(state.currentPhotoIndex - 1, "#editorCaption");
+    selectPhoto(state.currentPhotoIndex - 1);
   });
   $("#btnNextPhoto").addEventListener("click", () => {
     try { syncEditorToPhoto(); } catch (e) { $("#editorStatus").textContent = e.message; return; }
-    selectPhoto(state.currentPhotoIndex + 1, "#editorCaption");
+    selectPhoto(state.currentPhotoIndex + 1);
   });
   $("#btnSaveCurrent").addEventListener("click", saveCurrentPhoto);
+  $("#btnTrashCurrent").addEventListener("click", () => {
+    try { syncEditorToPhoto(); }
+    catch (error) { $("#editorStatus").textContent = error.message; return; }
+    const photo = state.manifest.photos[state.currentPhotoIndex];
+    if (state.deletions.has(photo)) restorePhoto(photo);
+    else markForTrash(photo);
+    renderPhotoEditor();
+  });
   document.addEventListener("keydown", (e) => {
     if ($("#listCard").hidden || !(state.manifest.photos || []).length) return;
     const target = e.target;
@@ -405,25 +548,44 @@ function initPhotoEditor() {
     }
     if (e.key === "F2") {
       e.preventDefault();
-      $("#editorCaption").focus();
-      $("#editorCaption").select();
+      const input = $("#editorName");
+      input.focus();
+      const dot = input.value.lastIndexOf(".");
+      input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
       return;
     }
-    if (e.key === "ArrowLeft") {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !editing) {
+      e.preventDefault();
+      undoTrash();
+      return;
+    }
+    if (e.key === "Delete" && !editing) {
+      e.preventDefault();
+      try { syncEditorToPhoto(); }
+      catch (err) {
+        $("#editorStatus").textContent = err.message;
+        return;
+      }
+      const photo = state.manifest.photos[state.currentPhotoIndex];
+      markForTrash(photo);
+      renderPhotoList();
+      selectPhoto(state.currentPhotoIndex + 1);
+      return;
+    }
+    if (e.key === "ArrowLeft" && !editing) {
       e.preventDefault();
       try { syncEditorToPhoto(); } catch (err) { $("#editorStatus").textContent = err.message; return; }
-      selectPhoto(state.currentPhotoIndex - 1, editing ? target.id : "#editorCaption");
-    } else if (e.key === "ArrowRight") {
+      selectPhoto(state.currentPhotoIndex - 1);
+    } else if (e.key === "ArrowRight" && !editing) {
       e.preventDefault();
       try { syncEditorToPhoto(); } catch (err) { $("#editorStatus").textContent = err.message; return; }
-      selectPhoto(state.currentPhotoIndex + 1, editing ? target.id : "#editorCaption");
+      selectPhoto(state.currentPhotoIndex + 1);
     }
   });
 }
 
 /* ---------- 启动 ---------- */
 (function boot() {
-  initBubbles();
   initPhotoEditor();
   // 预填仓库信息
   const cfg = (typeof SITE_CONFIG !== "undefined" && SITE_CONFIG.repo) || {};
@@ -431,22 +593,38 @@ function initPhotoEditor() {
   $("#inRepo").value = cfg.name || "";
   $("#inBranch").value = cfg.branch || "main";
 
+  const savedToken = localStorage.getItem("albumAdminToken") || "";
+  if (savedToken) {
+    $("#inToken").value = savedToken;
+    $("#chkSaveToken").checked = true;
+    state.token = savedToken;
+  }
+
+  loadPublicManifest();
+
   fetch("/__github_token")
     .then((r) => r.ok ? r.json() : Promise.reject(new Error("本机桥接服务不可用")))
     .then((data) => {
       if (!data.token) throw new Error(data.error || "未找到 gh 登录");
       $("#inToken").value = data.token;
+      state.token = data.token;
       $("#tokenStatus").textContent = "✓ 已读取本机 gh 凭据";
-      connect();
     })
-    .catch((e) => {
-      $("#tokenStatus").textContent = "请先运行 tools/local_server.py";
-      log("自动读取 Token 失败：" + e.message, "err");
-    });
+    .catch(() => {});
 
   $("#btnConnect").addEventListener("click", connect);
   $("#btnUpload").addEventListener("click", () => commitAll(true));
   $("#btnSaveManifest").addEventListener("click", () => commitAll(false));
+  $("#btnOpenAuth").addEventListener("click", () => openAuth(null));
+  $("#btnCloseAuth").addEventListener("click", () => { $("#authModal").hidden = true; state.pendingCommit = null; });
+  $("#btnOpenUpload").addEventListener("click", () => { $("#uploadCard").hidden = false; });
+  $("#btnCloseUpload").addEventListener("click", () => { $("#uploadCard").hidden = true; });
+  $("#authModal").addEventListener("click", (event) => {
+    if (event.target === $("#authModal")) $("#btnCloseAuth").click();
+  });
+  $("#uploadCard").addEventListener("click", (event) => {
+    if (event.target === $("#uploadCard")) $("#btnCloseUpload").click();
+  });
 
   const dz = $("#dropZone");
   const fi = $("#inFiles");
@@ -459,230 +637,4 @@ function initPhotoEditor() {
     dz.classList.remove("dragover");
     addFiles(e.dataTransfer.files);
   });
-})();
-
-
-
-
-/* ============================================================
- * 本地模式：扫描 photos/ 文件夹，登记 / 编辑照片清单
- * 通过 File System Access API 直接读写 photos.json
- * JPG 自动读取 EXIF 拍摄日期；日期、标题留空则相册不显示该项
- * ============================================================ */
-const local = {
-  dirHandle: null,
-  rows: [], // { name, src, file, thumbUrl, date, caption, include, registered, missing }
-};
-
-/* ---------- EXIF 拍摄日期提取（JPEG） ---------- */
-async function exifDate(file) {
-  try {
-    if (file.type !== "image/jpeg") return null;
-    const buf = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
-    if (buf[0] !== 0xff || buf[1] !== 0xd8) return null;
-    let off = 2;
-    while (off + 4 < buf.length) {
-      if (buf[off] !== 0xff) { off++; continue; }
-      const marker = buf[off + 1];
-      const len = (buf[off + 2] << 8) | (buf[off + 3] & 0xff);
-      if (marker === 0xda) break; // SOS，后面是图像数据
-      if (marker === 0xe1 && String.fromCharCode(...buf.slice(off + 4, off + 10)) === "Exif\0\0") {
-        return parseTIFF(buf, off + 10);
-      }
-      off += 2 + len;
-    }
-  } catch (e) { /* 解析失败就当没有 */ }
-  return null;
-}
-
-function parseTIFF(buf, tiff) {
-  try {
-    const dv = new DataView(buf.buffer, buf.byteOffset);
-    const le = String.fromCharCode(buf[tiff], buf[tiff + 1]) === "II";
-    const u16 = (o) => dv.getUint16(o, le);
-    const u32 = (o) => dv.getUint32(o, le);
-    const TYPE_SIZE = [0, 1, 1, 2, 4, 8, 2, 1, 2, 4, 8, 4, 8];
-    const fmt = (s) => {
-      const m = s.match(/(\d{4}):(\d{2}):(\d{2})/);
-      return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
-    };
-    function readIFD(ifdOff) {
-      const out = {};
-      const n = u16(ifdOff);
-      for (let i = 0; i < n; i++) {
-        const e = ifdOff + 2 + i * 12;
-        if (e + 12 > buf.length) break;
-        const tag = u16(e), type = u16(e + 2), count = u32(e + 4);
-        const size = (TYPE_SIZE[type] || 1) * count;
-        const valOff = size <= 4 ? e + 8 : tiff + u32(e + 8);
-        if (tag === 0x9003 || tag === 0x0132) { // DateTimeOriginal / DateTime
-          out.date = String.fromCharCode(...buf.slice(valOff, valOff + Math.min(count, 32)));
-        } else if (tag === 0x8769) { // Exif IFD 指针
-          out.exifPtr = tiff + u32(valOff);
-        }
-      }
-      return out;
-    }
-    const ifd0 = readIFD(tiff + u32(tiff + 4));
-    if (ifd0.exifPtr) {
-      const sub = readIFD(ifd0.exifPtr);
-      if (sub.date) return fmt(sub.date);
-    }
-    return ifd0.date ? fmt(ifd0.date) : null;
-  } catch (e) {
-    return null;
-  }
-}
-
-/* ---------- 扫描本地文件夹 ---------- */
-async function scanLocal() {
-  if (!local.dirHandle) return;
-  log("扫描本地 photos/ 文件夹…");
-  for (const r of local.rows) if (r.thumbUrl) URL.revokeObjectURL(r.thumbUrl);
-  local.rows = [];
-
-  // 读取现有 photos.json
-  let registered = new Map();
-  try {
-    const jh = await local.dirHandle.getFileHandle("photos.json");
-    const manifest = JSON.parse(await (await jh.getFile()).text());
-    for (const p of manifest.photos || []) registered.set(p.src, p);
-  } catch (e) { /* 没有就当空清单 */ }
-
-  // 遍历 photos/
-  const photosDir = await local.dirHandle.getDirectoryHandle("photos");
-  const names = [];
-  for await (const [name, handle] of photosDir.entries()) {
-    if (handle.kind === "file" && /\.(jpe?g|png|webp|gif|svg)$/i.test(name)) names.push(name);
-  }
-  names.sort();
-
-  for (const name of names) {
-    const src = `photos/${name}`;
-    const fh = await photosDir.getFileHandle(name);
-    const file = await fh.getFile();
-    const old = registered.get(src);
-    registered.delete(src);
-    local.rows.push({
-      name, src, file,
-      thumbUrl: URL.createObjectURL(file),
-      date: old ? old.date || "" : (await exifDate(file)) || new Date(file.lastModified).toISOString().slice(0, 10),
-      caption: old ? old.caption || "" : "",
-      include: true,
-      registered: !!old,
-    });
-  }
-  // 清单里有、但文件已不在的条目 → 保存时自动剔除
-  for (const [src, p] of registered) {
-    local.rows.push({ name: src, src, file: null, thumbUrl: null, date: p.date || "", caption: p.caption || "", include: false, registered: true, missing: true });
-  }
-  renderLocal();
-  const fresh = local.rows.filter((r) => !r.registered).length;
-  log(`扫描完成：${local.rows.length - fresh - local.rows.filter(r=>r.missing).length} 张已登记，${fresh} 张待登记`, "ok");
-}
-
-/* ---------- 渲染列表 ---------- */
-function renderLocal() {
-  const box = $("#localList");
-  box.innerHTML = "";
-  for (const r of local.rows) {
-    const row = el("div", "photo-row" + (r.missing ? " deleted" : ""));
-
-    if (r.thumbUrl) {
-      const img = el("img");
-      img.src = r.thumbUrl;
-      img.loading = "lazy";
-      row.appendChild(img);
-    } else {
-      const ph = el("div");
-      ph.textContent = "🚫";
-      ph.style.cssText = "width:84px;height:64px;display:flex;align-items:center;justify-content:center;font-size:24px;";
-      row.appendChild(ph);
-    }
-
-    const fields = el("div", "pv-fields");
-    const badge = el("span", "row-badge " + (r.missing ? "badge-missing" : r.registered ? "badge-ok" : "badge-new"));
-    badge.textContent = r.missing ? "文件缺失，保存时剔除" : r.registered ? "已登记" : "待登记";
-    fields.appendChild(badge);
-    if (!r.missing) {
-      const dateIn = el("input");
-      dateIn.type = "date";
-      dateIn.value = r.date;
-      dateIn.title = "留空则相册不显示日期";
-      dateIn.addEventListener("change", () => { r.date = dateIn.value; });
-      const capIn = el("input");
-      capIn.type = "text";
-      capIn.placeholder = "标题 / 文案（可留空）";
-      capIn.value = r.caption;
-      capIn.addEventListener("input", () => { r.caption = capIn.value; });
-      fields.appendChild(dateIn);
-      fields.appendChild(capIn);
-      const nameTag = el("span", "row-filename");
-      nameTag.textContent = r.name;
-      fields.appendChild(nameTag);
-    }
-    row.appendChild(fields);
-
-    if (!r.missing) {
-      const toggle = el("button", "row-del" + (r.include ? "" : " undo"));
-      toggle.textContent = r.include ? "不收录" : "恢复收录";
-      toggle.addEventListener("click", () => {
-        r.include = !r.include;
-        renderLocal();
-      });
-      row.appendChild(toggle);
-    }
-    box.appendChild(row);
-  }
-  const inc = local.rows.filter((r) => r.include && !r.missing).length;
-  $("#localSummary").textContent = `将保存 ${inc} 条记录`;
-}
-
-/* ---------- 保存 photos.json ---------- */
-async function saveLocal() {
-  if (!local.dirHandle) return;
-  const btn = $("#btnLocalSave");
-  btn.disabled = true;
-  try {
-    const photos = local.rows
-      .filter((r) => r.include && !r.missing)
-      .map((r) => {
-        const p = { src: r.src };
-        if (r.date) p.date = r.date;
-        if (r.caption) p.caption = r.caption;
-        return p;
-      });
-    photos.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    const jh = await local.dirHandle.getFileHandle("photos.json", { create: true });
-    const jw = await jh.createWritable();
-    await jw.write(JSON.stringify({ photos }, null, 2));
-    await jw.close();
-    log(`✅ photos.json 已保存（${photos.length} 条），刷新相册首页即可看到。`, "ok");
-    await scanLocal();
-  } catch (e) {
-    log("保存失败：" + e.message, "err");
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-/* ---------- 本地模式启动 ---------- */
-(function bootLocal() {
-  const btnPick = $("#btnPickDir");
-  if (!window.showDirectoryPicker) {
-    btnPick.disabled = true;
-    btnPick.textContent = "当前浏览器不支持本地管理（请用 Chrome / Edge）";
-    return;
-  }
-  btnPick.addEventListener("click", async () => {
-    try {
-      local.dirHandle = await showDirectoryPicker({ mode: "readwrite" });
-      $("#localDirName").textContent = "✓ " + local.dirHandle.name;
-      $("#localBody").hidden = false;
-      $("#btnRescan").hidden = false;
-      await scanLocal();
-    } catch (e) { /* 用户取消 */ }
-  });
-  $("#btnRescan").addEventListener("click", scanLocal);
-  $("#btnLocalSave").addEventListener("click", saveLocal);
 })();

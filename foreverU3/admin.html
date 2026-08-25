@@ -3,120 +3,111 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>相册管理 · LYK ♥ DMY</title>
+  <title>相册审阅 · LYK ♥ DMY</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💗</text></svg>" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/admin.css" />
 </head>
-<body>
-  <div class="bg-gradient"></div>
-  <div class="bg-glow bg-glow-1"></div>
-  <div class="bg-glow bg-glow-2"></div>
-  <div id="bubbles" class="bubbles" aria-hidden="true"></div>
-
-  <a class="float-btn back-btn" href="index.html" title="返回相册">←</a>
-
-  <main class="admin-wrap">
-    <h1 class="page-title">相册管理</h1>
-    <p class="page-desc">上传的照片会直接提交到 GitHub 仓库，几分钟后线上相册自动更新</p>
-
-    <!-- 本地导入（离线预览） -->
-    <section class="admin-card glass">
-      <h2>本地相册（离线管理，不用联网）</h2>
-      <p class="hint" style="margin-top:0">
-        选定项目文件夹后，自动列出 <code>photos/</code> 里的全部照片：
-        新照片标记为「待登记」，JPG 自动读取 EXIF 拍摄日期。
-        日期和标题都可以留空，留空的词条在相册里不会显示。
-        需要 Chrome / Edge，且本地用 <code>python -m http.server</code> 方式打开本页。
-      </p>
-      <div class="row-actions" style="margin-top:14px">
-        <button class="btn-ghost" id="btnPickDir">选择项目文件夹（index.html 所在的目录）</button>
-        <button class="btn-ghost" id="btnRescan" hidden>重新扫描</button>
-        <span class="status-ok" id="localDirName"></span>
+<body class="review-page">
+  <main class="reviewer" id="listCard">
+    <header class="review-topbar">
+      <a class="review-brand" href="index.html" title="返回相册">
+        <span>FOREVER U</span>
+        <strong>相册审阅</strong>
+      </a>
+      <div class="review-counter" id="editorCounter">000 / 000</div>
+      <div class="review-tools">
+        <button class="tool-btn" id="btnOpenUpload" type="button">＋ 上传照片</button>
+        <button class="tool-btn" id="btnOpenAuth" type="button">GitHub 连接</button>
       </div>
-      <div id="localBody" hidden>
-        <div id="localList" class="photo-list" style="margin-top:16px"></div>
-        <div class="row-actions">
-          <button class="btn-primary" id="btnLocalSave">保存到 photos.json 🫧</button>
-          <span class="hint" id="localSummary"></span>
-        </div>
-      </div>
+    </header>
+
+    <section class="review-stage" id="photoEditor" hidden>
+      <div class="review-loader" id="reviewLoader">正在读取相册…</div>
+      <img id="editorImage" class="review-image" alt="当前照片" draggable="false" />
+      <button class="stage-nav stage-prev" id="btnPrevPhoto" type="button" aria-label="上一张">‹</button>
+      <button class="stage-nav stage-next" id="btnNextPhoto" type="button" aria-label="下一张">›</button>
     </section>
 
-    <!-- 仓库连接 -->
-    <section class="admin-card glass">
-      <h2>① 连接仓库（上传到线上）</h2>
+    <section class="review-empty" id="reviewEmpty" hidden>相册里还没有照片</section>
+
+    <footer class="review-footer">
+      <div class="review-fields">
+        <label class="field-name">
+          <span>文件名</span>
+          <input id="editorName" type="text" placeholder="照片名称.jpg" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="field-date">
+          <span>日期</span>
+          <input id="editorDate" type="text" inputmode="numeric" maxlength="8" pattern="[0-9]{8}" placeholder="YYYYMMDD" autocomplete="off" />
+        </label>
+        <label class="field-caption">
+          <span>文案（可选）</span>
+          <input id="editorCaption" type="text" placeholder="这张照片的故事…" autocomplete="off" />
+        </label>
+        <span id="editorFilename" class="source-path"></span>
+      </div>
+      <div class="review-actions">
+        <span id="editorStatus" class="review-status"></span>
+        <button class="trash-btn" id="btnTrashCurrent" type="button">移入回收站</button>
+        <button class="save-btn" id="btnSaveCurrent" type="button">保存</button>
+      </div>
+      <div class="review-shortcuts">
+        <span><kbd>←</kbd><kbd>→</kbd> 切换</span>
+        <span><kbd>F2</kbd> 改名</span>
+        <span><kbd>Del</kbd> 回收站</span>
+        <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销</span>
+        <span><kbd>Ctrl</kbd>+<kbd>S</kbd> 保存</span>
+      </div>
+    </footer>
+  </main>
+
+  <section class="review-modal" id="authModal" hidden>
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div><small>保存前需要</small><h2>连接 GitHub</h2></div>
+        <button class="modal-close" id="btnCloseAuth" type="button" aria-label="关闭">×</button>
+      </div>
       <div class="form-grid">
         <label>用户名<input id="inOwner" placeholder="featherblade91" /></label>
         <label>仓库名<input id="inRepo" placeholder="featherblade91.github.io" /></label>
-        <label>分支<input id="inBranch" placeholder="main" /></label>
-        <label class="span-all">
-          GitHub Token
-          <input id="inToken" type="password" placeholder="正在从本机 gh 登录读取…" autocomplete="off" readonly />
+        <label>分支<input id="inBranch" placeholder="master" /></label>
+        <label class="span-all">GitHub Token
+          <input id="inToken" type="password" placeholder="Fine-grained Token（Contents 读写）" autocomplete="off" />
         </label>
       </div>
-      <div class="row-actions">
-        <button class="btn-primary" id="btnConnect">自动连接并读取相册</button>
-        <span class="status-ok" id="tokenStatus"></span>
+      <label class="remember-token"><input type="checkbox" id="chkSaveToken" /> 仅在此浏览器保存 Token</label>
+      <div class="modal-actions">
+        <span id="tokenStatus" class="review-status"></span>
+        <button class="save-btn" id="btnConnect" type="button">连接</button>
       </div>
-      <p class="hint">本地运行 <code>python3 tools/local_server.py</code> 后，管理端会自动读取当前电脑的 GitHub CLI 登录凭据，不需要手动粘贴 Token。</p>
-    </section>
+    </div>
+  </section>
 
-    <!-- 上传新照片 -->
-    <section class="admin-card glass" id="uploadCard" hidden>
-      <h2>② 上传新照片</h2>
+  <section class="review-modal" id="uploadCard" hidden>
+    <div class="modal-panel upload-panel">
+      <div class="modal-head">
+        <div><small>ADD MEMORIES</small><h2>上传新照片</h2></div>
+        <button class="modal-close" id="btnCloseUpload" type="button" aria-label="关闭">×</button>
+      </div>
       <label class="drop-zone" id="dropZone">
         <input type="file" id="inFiles" accept="image/*" multiple hidden />
-        <span class="dz-icon">🫧</span>
-        <span>点击选择或拖拽照片到这里（可多选）</span>
+        <span class="dz-icon">＋</span>
+        <span>点击选择或拖拽照片到这里</span>
       </label>
       <div id="previewList" class="preview-list"></div>
-      <div class="row-actions">
-        <button class="btn-primary" id="btnUpload" disabled>提交到 GitHub 💌</button>
+      <div class="modal-actions">
+        <button class="save-btn" id="btnUpload" type="button" disabled>上传并同步</button>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <!-- 现有照片 -->
-    <section class="admin-card glass" id="listCard" hidden>
-      <h2>③ 管理现有照片</h2>
-      <div id="photoEditor" class="photo-editor" hidden>
-        <div class="editor-head">
-          <div>
-            <strong id="editorCounter"></strong>
-            <span class="hint">左右方向键切换照片 · F2 编辑名称 · Tab 到日期 · Ctrl/⌘+S 保存</span>
-          </div>
-          <span id="editorStatus" class="status-ok"></span>
-        </div>
-        <div class="editor-body">
-          <img id="editorImage" class="editor-image" alt="当前照片" />
-          <div class="editor-fields">
-            <label>名称 / 文案
-              <input id="editorCaption" type="text" placeholder="这张照片的故事…" autocomplete="off" />
-            </label>
-            <label>日期
-              <input id="editorDate" type="text" inputmode="numeric" maxlength="8" pattern="[0-9]{8}" placeholder="YYYYMMDD" autocomplete="off" />
-            </label>
-            <span id="editorFilename" class="row-filename"></span>
-          </div>
-        </div>
-        <div class="row-actions editor-actions">
-          <button class="btn-ghost" id="btnPrevPhoto" type="button">← 上一张</button>
-          <button class="btn-ghost" id="btnNextPhoto" type="button">下一张 →</button>
-          <button class="btn-primary" id="btnSaveCurrent" type="button">保存并同步 GitHub</button>
-        </div>
-      </div>
-      <div id="photoList" class="photo-list"></div>
-      <div class="row-actions">
-        <button class="btn-ghost" id="btnSaveManifest">保存全部修改（日期 / 文案 / 删除）</button>
-      </div>
-    </section>
+  <section class="log-drawer" id="logCard" hidden>
+    <pre id="log" class="log"></pre>
+  </section>
 
-    <!-- 日志 -->
-    <section class="admin-card glass" id="logCard" hidden>
-      <h2>提交日志</h2>
-      <pre id="log" class="log"></pre>
-    </section>
-  </main>
+  <div id="photoList" hidden></div>
+  <button id="btnSaveManifest" type="button" hidden></button>
 
   <script src="js/config.js"></script>
   <script src="js/admin.js"></script>
