@@ -51,15 +51,15 @@
         <label>仓库名<input id="inRepo" placeholder="featherblade91.github.io" /></label>
         <label>分支<input id="inBranch" placeholder="main" /></label>
         <label class="span-all">
-          Token（fine-grained PAT，需 Contents 读写权限）
-          <input id="inToken" type="password" placeholder="github_pat_..." autocomplete="off" />
+          GitHub Token
+          <input id="inToken" type="password" placeholder="正在从本机 gh 登录读取…" autocomplete="off" readonly />
         </label>
       </div>
       <div class="row-actions">
-        <button class="btn-primary" id="btnConnect">连接并读取相册</button>
-        <label class="chk"><input type="checkbox" id="chkSaveToken" /> 在此浏览器记住 Token</label>
+        <button class="btn-primary" id="btnConnect">自动连接并读取相册</button>
+        <span class="status-ok" id="tokenStatus"></span>
       </div>
-      <p class="hint">Token 只保存在你自己浏览器的 localStorage 里，不会发送到 GitHub 之外的任何地方。</p>
+      <p class="hint">本地运行 <code>python3 tools/local_server.py</code> 后，管理端会自动读取当前电脑的 GitHub CLI 登录凭据，不需要手动粘贴 Token。</p>
     </section>
 
     <!-- 上传新照片 -->
@@ -79,9 +79,35 @@
     <!-- 现有照片 -->
     <section class="admin-card glass" id="listCard" hidden>
       <h2>③ 管理现有照片</h2>
+      <div id="photoEditor" class="photo-editor" hidden>
+        <div class="editor-head">
+          <div>
+            <strong id="editorCounter"></strong>
+            <span class="hint">左右方向键切换照片 · F2 编辑名称 · Tab 到日期 · Ctrl/⌘+S 保存</span>
+          </div>
+          <span id="editorStatus" class="status-ok"></span>
+        </div>
+        <div class="editor-body">
+          <img id="editorImage" class="editor-image" alt="当前照片" />
+          <div class="editor-fields">
+            <label>名称 / 文案
+              <input id="editorCaption" type="text" placeholder="这张照片的故事…" autocomplete="off" />
+            </label>
+            <label>日期
+              <input id="editorDate" type="text" inputmode="numeric" maxlength="8" pattern="[0-9]{8}" placeholder="YYYYMMDD" autocomplete="off" />
+            </label>
+            <span id="editorFilename" class="row-filename"></span>
+          </div>
+        </div>
+        <div class="row-actions editor-actions">
+          <button class="btn-ghost" id="btnPrevPhoto" type="button">← 上一张</button>
+          <button class="btn-ghost" id="btnNextPhoto" type="button">下一张 →</button>
+          <button class="btn-primary" id="btnSaveCurrent" type="button">保存并同步 GitHub</button>
+        </div>
+      </div>
       <div id="photoList" class="photo-list"></div>
       <div class="row-actions">
-        <button class="btn-ghost" id="btnSaveManifest">保存修改（日期 / 文案 / 删除）</button>
+        <button class="btn-ghost" id="btnSaveManifest">保存全部修改（日期 / 文案 / 删除）</button>
       </div>
     </section>
 

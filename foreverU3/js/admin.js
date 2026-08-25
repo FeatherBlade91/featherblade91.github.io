@@ -16,6 +16,8 @@ const state = {
   manifest: { photos: [] }, // 当前线上的 photos.json 内容
   pending: [],              // 待上传 { file, dataUrl, date, caption }
   deletions: new Set(),     // 标记删除的 src
+  currentPhotoIndex: 0,
+  committing: false,
 };
 
 /* ---------- 日志 ---------- */
@@ -54,15 +56,8 @@ async function connect() {
   const pp = (SITE_CONFIG.repo && SITE_CONFIG.repo.pathPrefix) || "";
   state.prefix = pp ? pp.replace(/\/*$/, "/") : "";
   if (!state.owner || !state.repo || !state.token) {
-    log("请填完整用户名、仓库名和 Token", "err");
+    log("未读取到本机 GitHub 登录凭据，请先启动 tools/local_server.py 并确认 gh 已登录", "err");
     return;
-  }
-  if ($("#chkSaveToken").checked) {
-    localStorage.setItem("albumAdmin", JSON.stringify({
-      owner: state.owner, repo: state.repo, branch: state.branch, token: state.token,
-    }));
-  } else {
-    localStorage.removeItem("albumAdmin");
   }
   log(`正在连接 ${state.owner}/${state.repo} ...`);
   try {
@@ -86,6 +81,72 @@ async function connect() {
   }
 }
 
+function compactDate(date) {
+  return String(date || "").replace(/\D/g, "").slice(0, 8);
+}
+
+function canonicalDate(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (!/^\d{8}$/.test(digits)) throw new Error("日期请填写 8 位数字，例如 20260825");
+  const year = Number(digits.slice(0, 4));
+  const month = Number(digits.slice(4, 6));
+  const day = Number(digits.slice(6, 8));
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
+    throw new Error("日期无效，请检查 YYYYMMDD");
+  }
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+}
+
+function selectPhoto(index, focus) {
+  const photos = state.manifest.photos || [];
+  if (!photos.length) return;
+  state.currentPhotoIndex = (index + photos.length) % photos.length;
+  renderPhotoEditor(focus);
+  document.querySelectorAll("#photoList .photo-row").forEach((row, i) => {
+    row.classList.toggle("active", i === state.currentPhotoIndex);
+  });
+}
+
+function renderPhotoEditor(focus) {
+  const photos = state.manifest.photos || [];
+  const editor = $("#photoEditor");
+  if (!photos.length) {
+    editor.hidden = true;
+    return;
+  }
+  state.currentPhotoIndex = Math.min(state.currentPhotoIndex, photos.length - 1);
+  const p = photos[state.currentPhotoIndex];
+  editor.hidden = false;
+  $("#editorCounter").textContent = `${state.currentPhotoIndex + 1} / ${photos.length}`;
+  $("#editorImage").src = p.src;
+  $("#editorCaption").value = p.caption || "";
+  $("#editorDate").value = compactDate(p.date);
+  $("#editorFilename").textContent = p.src;
+  $("#editorStatus").textContent = state.deletions.has(p.src) ? "已标记删除" : "";
+  if (focus) requestAnimationFrame(() => $(focus).focus());
+}
+
+function syncEditorToPhoto() {
+  const photos = state.manifest.photos || [];
+  const p = photos[state.currentPhotoIndex];
+  if (!p) return;
+  p.caption = $("#editorCaption").value.trim();
+  p.date = canonicalDate($("#editorDate").value);
+}
+
+async function saveCurrentPhoto() {
+  try {
+    syncEditorToPhoto();
+  } catch (e) {
+    $("#editorStatus").textContent = e.message;
+    $("#editorDate").focus();
+    return;
+  }
+  await commitAll(false);
+}
+
 /* ---------- 现有照片列表 ---------- */
 function renderPhotoList() {
   const box = $("#photoList");
@@ -93,10 +154,16 @@ function renderPhotoList() {
   const photos = state.manifest.photos || [];
   if (!photos.length) {
     box.innerHTML = '<p class="hint">还没有照片，先上传第一张吧。</p>';
+    renderPhotoEditor();
     return;
   }
   photos.forEach((p, i) => {
     const row = el("div", "photo-row");
+    row.classList.toggle("active", i === state.currentPhotoIndex);
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("input,button")) return;
+      selectPhoto(i);
+    });
     if (state.deletions.has(p.src)) row.classList.add("deleted");
     const img = el("img");
     img.src = p.src;
@@ -104,17 +171,35 @@ function renderPhotoList() {
     row.appendChild(img);
 
     const fields = el("div", "pv-fields");
-    const dateIn = el("input");
-    dateIn.type = "date";
-    dateIn.value = p.date || "";
-    dateIn.addEventListener("change", () => { p.date = dateIn.value; });
     const capIn = el("input");
     capIn.type = "text";
-    capIn.placeholder = "这张照片的故事…";
+    capIn.placeholder = "名称 / 文案…";
     capIn.value = p.caption || "";
-    capIn.addEventListener("input", () => { p.caption = capIn.value; });
-    fields.appendChild(dateIn);
+    capIn.addEventListener("input", () => {
+      p.caption = capIn.value;
+      if (i === state.currentPhotoIndex && document.activeElement !== $("#editorCaption")) {
+        $("#editorCaption").value = p.caption;
+      }
+    });
+    const dateIn = el("input");
+    dateIn.type = "text";
+    dateIn.inputMode = "numeric";
+    dateIn.maxLength = 8;
+    dateIn.placeholder = "YYYYMMDD";
+    dateIn.value = compactDate(p.date);
+    dateIn.addEventListener("change", () => {
+      try {
+        p.date = canonicalDate(dateIn.value);
+        dateIn.value = compactDate(p.date);
+        if (i === state.currentPhotoIndex && document.activeElement !== $("#editorDate")) {
+          $("#editorDate").value = compactDate(p.date);
+        }
+        dateIn.setCustomValidity("");
+      }
+      catch (e) { dateIn.setCustomValidity(e.message); dateIn.reportValidity(); }
+    });
     fields.appendChild(capIn);
+    fields.appendChild(dateIn);
     row.appendChild(fields);
 
     const del = el("button", "row-del" + (state.deletions.has(p.src) ? " undo" : ""));
@@ -127,6 +212,7 @@ function renderPhotoList() {
     row.appendChild(del);
     box.appendChild(row);
   });
+  renderPhotoEditor();
 }
 
 /* ---------- 选择待上传照片 ---------- */
@@ -179,6 +265,16 @@ function renderPending() {
 /* ---------- 提交：一次 commit 包含新图片 + 更新后的 photos.json ---------- */
 async function commitAll(withImages) {
   const btn = withImages ? $("#btnUpload") : $("#btnSaveManifest");
+  if (state.committing) return;
+  if (!withImages && (state.manifest.photos || []).length) {
+    try { syncEditorToPhoto(); }
+    catch (e) {
+      $("#editorStatus").textContent = e.message;
+      $("#editorDate").focus();
+      return;
+    }
+  }
+  state.committing = true;
   btn.disabled = true;
   try {
     log("读取分支引用…");
@@ -199,7 +295,7 @@ async function commitAll(withImages) {
         body: JSON.stringify({ content: base64, encoding: "base64" }),
       });
       const safe = item.file.name.replace(/[^\w.\-]/g, "_");
-      const path = `${state.prefix}photos/${Date.now()}-${safe}`;
+      const path = `${state.prefix}photos/${Date.now()}-${newEntries.length}-${safe}`;
       tree.push({ path, mode: "100644", type: "blob", sha: blob.sha });
       newEntries.push({ src: path.replace(new RegExp("^" + state.prefix), ""), date: item.date, caption: item.caption });
     }
@@ -242,6 +338,7 @@ async function commitAll(withImages) {
   } catch (e) {
     log("提交失败：" + e.message, "err");
   } finally {
+    state.committing = false;
     btn.disabled = false;
   }
 }
@@ -262,19 +359,90 @@ function initBubbles() {
   }
 }
 
+function initPhotoEditor() {
+  $("#editorCaption").addEventListener("input", () => {
+    const p = (state.manifest.photos || [])[state.currentPhotoIndex];
+    if (p) p.caption = $("#editorCaption").value;
+  });
+  $("#editorDate").addEventListener("input", () => {
+    $("#editorDate").setCustomValidity("");
+  });
+  $("#editorDate").addEventListener("blur", () => {
+    try {
+      const date = canonicalDate($("#editorDate").value);
+      $("#editorDate").value = compactDate(date);
+      $("#editorDate").setCustomValidity("");
+    } catch (e) {
+      if ($("#editorDate").value) {
+        $("#editorDate").setCustomValidity(e.message);
+        $("#editorStatus").textContent = e.message;
+      }
+    }
+  });
+  $("#editorDate").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveCurrentPhoto();
+    }
+  });
+  $("#btnPrevPhoto").addEventListener("click", () => {
+    try { syncEditorToPhoto(); } catch (e) { $("#editorStatus").textContent = e.message; return; }
+    selectPhoto(state.currentPhotoIndex - 1, "#editorCaption");
+  });
+  $("#btnNextPhoto").addEventListener("click", () => {
+    try { syncEditorToPhoto(); } catch (e) { $("#editorStatus").textContent = e.message; return; }
+    selectPhoto(state.currentPhotoIndex + 1, "#editorCaption");
+  });
+  $("#btnSaveCurrent").addEventListener("click", saveCurrentPhoto);
+  document.addEventListener("keydown", (e) => {
+    if ($("#listCard").hidden || !(state.manifest.photos || []).length) return;
+    const target = e.target;
+    const editing = target && target.matches("input, textarea, select");
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      saveCurrentPhoto();
+      return;
+    }
+    if (e.key === "F2") {
+      e.preventDefault();
+      $("#editorCaption").focus();
+      $("#editorCaption").select();
+      return;
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      try { syncEditorToPhoto(); } catch (err) { $("#editorStatus").textContent = err.message; return; }
+      selectPhoto(state.currentPhotoIndex - 1, editing ? target.id : "#editorCaption");
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      try { syncEditorToPhoto(); } catch (err) { $("#editorStatus").textContent = err.message; return; }
+      selectPhoto(state.currentPhotoIndex + 1, editing ? target.id : "#editorCaption");
+    }
+  });
+}
+
 /* ---------- 启动 ---------- */
 (function boot() {
   initBubbles();
+  initPhotoEditor();
   // 预填仓库信息
-  const saved = JSON.parse(localStorage.getItem("albumAdmin") || "null");
   const cfg = (typeof SITE_CONFIG !== "undefined" && SITE_CONFIG.repo) || {};
-  $("#inOwner").value = (saved && saved.owner) || cfg.owner || "";
-  $("#inRepo").value = (saved && saved.repo) || cfg.name || "";
-  $("#inBranch").value = (saved && saved.branch) || cfg.branch || "main";
-  if (saved && saved.token) {
-    $("#inToken").value = saved.token;
-    $("#chkSaveToken").checked = true;
-  }
+  $("#inOwner").value = cfg.owner || "";
+  $("#inRepo").value = cfg.name || "";
+  $("#inBranch").value = cfg.branch || "main";
+
+  fetch("/__github_token")
+    .then((r) => r.ok ? r.json() : Promise.reject(new Error("本机桥接服务不可用")))
+    .then((data) => {
+      if (!data.token) throw new Error(data.error || "未找到 gh 登录");
+      $("#inToken").value = data.token;
+      $("#tokenStatus").textContent = "✓ 已读取本机 gh 凭据";
+      connect();
+    })
+    .catch((e) => {
+      $("#tokenStatus").textContent = "请先运行 tools/local_server.py";
+      log("自动读取 Token 失败：" + e.message, "err");
+    });
 
   $("#btnConnect").addEventListener("click", connect);
   $("#btnUpload").addEventListener("click", () => commitAll(true));

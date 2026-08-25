@@ -61,25 +61,23 @@ python -m http.server 8000
 
 ## 在线上传照片（管理端 GitHub 模式）
 
-1. 打开 <https://featherblade91.github.io/foreverU3/admin.html>。
-2. 在「连接仓库」卡片填入 Token（仓库/分支/子目录已在 `js/config.js` 里预填为
-   `featherblade91.github.io` / `master` / `foreverU3`）。
-3. 点「连接并读取相册」，之后选照片、填日期文案、「提交到 GitHub 💌」即可。
+1. 在项目根目录运行 `python3 tools/local_server.py`，再打开
+   <http://127.0.0.1:8000/admin.html>。管理端会自动读取本机 `gh` 登录凭据，
+   不需要手动粘贴 Token（仓库/分支/子目录已在 `js/config.js` 里预填）。
+2. 页面会自动连接并读取线上相册；选照片（支持批量）、填日期文案后点「提交到 GitHub 💌」即可。
    GitHub Pages 约 1~2 分钟后更新线上相册。
 
-### Token 从哪来
+### 线上照片的键盘编辑
 
-**本机可能已有现成的**（Windows 凭据管理器）：
-- 控制面板 → 用户帐户 → **凭据管理器** → **Windows 凭据** → 普通凭据里找
-  `git:https://github.com`，点「显示」即可看到密码——那通常就是一个可用 Token。
+连接仓库后，在「管理现有照片」的编辑工作台里可以连续处理照片：
 
-**没有就新建一个**（推荐，权限最小）：
-GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens**：
-- Repository access：只选 `featherblade91.github.io`
-- Permissions：**Contents → Read and write**
+- `F2` 聚焦当前照片的名称 / 文案；按 `Tab` 进入日期框，直接输入 8 位 `YYYYMMDD`；
+- `←` / `→` 切换上一张 / 下一张照片，切换前会保留当前输入；
+- 日期框按 `Enter`、点击「保存并同步 GitHub」，或按 `Ctrl+S` / `⌘+S`，都会立即提交一次 `photos.json` 更新。
 
-> 注意：GitHub 网页上 Token 只在**创建那一刻**完整显示一次，之后无法再查看，只能重新生成。
-> 管理页的 Token 只保存在你自己浏览器的 localStorage 里，代码中不含任何密钥。
+日期会在提交前校验为真实日期，并写回相册使用的 `YYYY-MM-DD` 格式。
+
+> Token 由本机已登录的 `gh` CLI 临时提供，不写入项目文件，也不保存到浏览器。
 
 ## 个性化
 

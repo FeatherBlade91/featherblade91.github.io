@@ -23,15 +23,15 @@
   <button id="musicToggle" class="float-btn music-btn" title="播放 / 暂停音乐" aria-label="音乐开关">
     <span class="music-note">♪</span>
   </button>
-  <a class="float-btn admin-btn" href="admin.html" title="管理相册">🛠️</a>
+  <a class="float-btn admin-btn" href="admin.html" title="管理相册">✎</a>
   <button id="settingsToggle" class="float-btn settings-btn" title="设置" aria-label="设置">⚙</button>
 
   <!-- ===== 模式导航 ===== -->
   <nav class="mode-nav" id="modeNav">
-    <button class="nav-pill active" data-mode="home">🏠 首页</button>
-    <button class="nav-pill" data-mode="ring">🎡 3D 相册</button>
-    <button class="nav-pill" data-mode="galaxy">🌌 星河漫游</button>
-    <button class="nav-pill" data-mode="slideshow">🎞 幻灯片</button>
+    <button class="nav-pill active" data-mode="home"><span class="nav-zh">首页</span><span class="nav-en">Home</span></button>
+    <button class="nav-pill" data-mode="ring"><span class="nav-zh">3D 相册</span><span class="nav-en">Ring</span></button>
+    <button class="nav-pill" data-mode="galaxy"><span class="nav-zh">星河漫游</span><span class="nav-en">Orbit</span></button>
+    <button class="nav-pill" data-mode="slideshow"><span class="nav-zh">幻灯片</span><span class="nav-en">Film</span></button>
   </nav>
 
   <main id="app">
@@ -60,11 +60,20 @@
         </h1>
         <p class="hero-subtitle" id="heroSubtitle"></p>
 
-        <div class="timer-card glass">
-          <div class="timer-label">我们已经在一起</div>
-          <div class="timer-grid" id="loveTimer"></div>
-          <button class="timer-switch" id="timerSwitch" title="切换计时方式"></button>
+        <div class="timer-wrap">
+          <div class="timer-card glass">
+            <div class="timer-label">我们已经在一起</div>
+            <div class="timer-grid" id="loveTimer"></div>
+            <button class="timer-switch" id="timerSwitch" title="切换计时方式"></button>
+          </div>
+          <!-- 拍立得：随机贴一张照片在计时卡角上，点开看大图 -->
+          <button class="hero-polaroid" id="heroPolaroid" type="button" hidden aria-label="看这张照片的大图">
+            <span class="polaroid-img"><img id="polaroidImg" alt="" /></span>
+            <span class="polaroid-cap" id="polaroidCap"></span>
+          </button>
         </div>
+
+        <p class="hero-milestone" id="heroMilestone" hidden></p>
 
         <div class="hero-actions">
           <button class="btn-ghost" data-goto="ring">开始逛相册 →</button>
@@ -72,7 +81,7 @@
       </div>
       <!-- 悄悄话入口故意做得不起眼：左下角一个淡淡的小信封 -->
       <button id="openLetter" class="secret-letter" title="" aria-label="悄悄话">💌</button>
-      <div class="scroll-hint">✦ 点击上方导航，切换不同的看照片姿势 ✦</div>
+      <div class="scroll-hint">✦ 点击导航，换个姿势看照片 ✦</div>
     </section>
 
     <!-- ===== 3D 旋转相册 ===== -->
@@ -80,6 +89,8 @@
       <div class="ring-stage" id="ringStage">
         <div class="ring" id="ring"></div>
         <div class="ring-floor"></div>
+        <div class="ring-now" id="ringNow"></div>
+        <div class="ring-hint">左右拨动 · 上下拖动换视角 · 滚轮/双指推拉 · 点照片看大图</div>
       </div>
     </section>
 
@@ -88,7 +99,12 @@
       <div class="galaxy-stage" id="galaxyStage">
         <div class="galaxy-space" id="galaxySpace"></div>
         <div class="galaxy-vignette"></div>
-        <div class="galaxy-hint">拖拽转动视角 · 滚轮加速穿梭 · 点击照片看大图</div>
+        <div class="galaxy-views">
+          <button data-view="far" title="拉远一点，看整条照片光环">🪐 远景</button>
+          <button data-view="ring" title="贴着环面，看照片列队掠过">💍 环面</button>
+          <button data-view="near" title="凑近一点，照片从身边飞过">🔭 近观</button>
+        </div>
+        <div class="galaxy-hint">左右拨动星环 · 上下拖动换视角 · 滚轮/双指推拉远近 · 点击照片看大图</div>
       </div>
     </section>
 
@@ -97,13 +113,19 @@
       <div class="slide-box" id="slideBox">
         <div class="slide-layer" id="slideA"></div>
         <div class="slide-layer" id="slideB"></div>
-        <div class="slide-caption" id="slideCaption"></div>
+        <!-- 顶部 2px 进度发丝，与自动播放同周期（时长在 Slideshow.DUR） -->
+        <div class="slide-progress"><span class="slide-progress-bar" id="slideBar"></span></div>
+        <div class="slide-caption" id="slideCaption">
+          <span class="slide-cap-title" id="slideCapTitle"></span>
+          <span class="slide-cap-date" id="slideCapDate"></span>
+        </div>
         <div class="slide-controls">
           <button class="slide-btn" id="slidePrev">‹</button>
           <button class="slide-btn" id="slidePlay">⏸</button>
           <button class="slide-btn" id="slideNext">›</button>
         </div>
-        <div class="slide-dots" id="slideDots"></div>
+        <!-- 胶片计数器（03 / 151）：照片多了放不下圆点，用计数器替代 -->
+        <div class="slide-counter" id="slideCounter"></div>
       </div>
     </section>
 
@@ -145,6 +167,6 @@
 
   <script src="js/config.js"></script>
   <script src="js/music.js"></script>
-  <script src="js/main.js?v=20260825"></script>
+  <script src="js/main.js?v=20260826"></script>
 </body>
 </html>

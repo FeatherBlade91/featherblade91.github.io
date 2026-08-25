@@ -68,6 +68,22 @@
 .pv-remove:hover { background: rgba(242, 114, 168, 0.15); color: var(--pink-deep); }
 
 .photo-list { display: flex; flex-direction: column; gap: 12px; }
+.photo-editor {
+  margin: 0 0 20px; padding: 16px; border-radius: 18px;
+  background: rgba(255, 255, 255, 0.48); border: 1px solid rgba(255, 255, 255, 0.85);
+}
+.editor-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.editor-head strong { display: block; color: var(--ink); font-size: 15px; }
+.editor-head .hint { display: block; margin-top: 5px; }
+.editor-body { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: center; margin-top: 14px; }
+.editor-image { width: 220px; height: 165px; object-fit: contain; border-radius: 14px; background: rgba(255,255,255,.5); }
+.editor-fields { display: flex; flex-direction: column; gap: 12px; }
+.editor-fields label { display: flex; flex-direction: column; gap: 6px; color: var(--ink-soft); font-size: 13px; }
+.editor-fields input { padding: 10px 12px; border-radius: 10px; font-size: 14px; color: var(--ink); border: 1px solid rgba(143, 199, 245, 0.6); background: rgba(255,255,255,.86); outline: none; }
+.editor-fields input:focus { border-color: var(--pink-2); box-shadow: 0 0 0 3px rgba(255, 179, 209, 0.25); }
+.editor-fields #editorDate { width: 160px; letter-spacing: 1px; }
+.editor-actions { margin-top: 14px; }
+.photo-row.active { border-color: var(--pink-2); box-shadow: 0 0 0 3px rgba(255, 179, 209, 0.2); }
 .row-badge {
   align-self: flex-start; padding: 1px 10px; border-radius: 999px; font-size: 11px;
 }
@@ -105,6 +121,8 @@
 
 @media (max-width: 600px) {
   .form-grid { grid-template-columns: 1fr; }
+  .editor-body { grid-template-columns: 1fr; }
+  .editor-image { width: 100%; height: min(52vw, 220px); }
   .preview-item, .photo-row { grid-template-columns: 64px 1fr; }
   .pv-remove, .row-del { grid-column: 1 / -1; justify-self: end; }
   .preview-item img, .photo-row img { width: 64px; height: 52px; }

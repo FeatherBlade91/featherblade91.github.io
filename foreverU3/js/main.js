@@ -4,6 +4,7 @@
  * ============================================================ */
 
 let PHOTOS = []; // { src, date, caption, milestone }
+const HOME_POLAROID = { idx: -1, render: null };
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -44,6 +45,8 @@ function makeSceneDrag(stage, onDrag, dragButton = 0) {
   };
   stage.addEventListener("pointerdown", (e) => {
     if (e.button !== dragButton) return;
+    // 已在拖拽中又来了第二根手指：忽略，别重置起点（星河的双指捏合在 Galaxy 里单独处理）
+    if (t.dragging) return;
     // 中键默认会触发浏览器自动滚屏，星河用它拖拽时需要阻止。
     if (dragButton === 1) e.preventDefault();
     t.dragging = true;
@@ -219,7 +222,7 @@ function initHome() {
       grid.appendChild(cell);
       return num;
     });
-    switchBtn.textContent = mode === "days" ? "🗓 换成 几年几月几周几天" : "🗓 换成 总天数";
+    switchBtn.textContent = mode === "days" ? "⇄ 换成 几年几月几周几天" : "⇄ 换成 总天数";
   }
 
   function currentVals() {
@@ -269,6 +272,52 @@ function initHome() {
   buildCells();
   countUp(currentVals());
   setInterval(tick, 1000);
+
+  // 计时卡右上角贴的拍立得：随机一张照片，点开看大图（走全站统一的灯箱）
+  (function polaroid() {
+    const btn = $("#heroPolaroid");
+    if (!btn || !PHOTOS.length) return;
+    const img = $("#polaroidImg");
+    const render = (i) => {
+      HOME_POLAROID.idx = i;
+      img.alt = photoName(PHOTOS[i]);
+      setThumb(img, PHOTOS[i]);
+      $("#polaroidCap").textContent = photoName(PHOTOS[i]);
+    };
+    HOME_POLAROID.render = render;
+    render(Math.floor(Math.random() * PHOTOS.length));
+    btn.hidden = false;
+    btn.addEventListener("click", () => Lightbox.open(HOME_POLAROID.idx, { homePolaroid: true }));
+  })();
+
+  // 下一个纪念日提醒：取 milestones 里离今天（北京时间）最近的一个
+  (function nextMilestone() {
+    const box = $("#heroMilestone");
+    const list = SITE_CONFIG.milestones || [];
+    if (!box || !list.length) return;
+    const nowB = beijingNow();
+    const today = Date.UTC(nowB.getUTCFullYear(), nowB.getUTCMonth(), nowB.getUTCDate());
+    let best = null;
+    for (const m of list) {
+      const [mm, dd] = (m.date || "").split("-").map(Number);
+      if (!mm || !dd) continue;
+      let t = Date.UTC(nowB.getUTCFullYear(), mm - 1, dd);
+      if (t < today) t = Date.UTC(nowB.getUTCFullYear() + 1, mm - 1, dd);
+      const days = Math.round((t - today) / 86400000);
+      if (!best || days < best.days) best = { days, title: m.title };
+    }
+    if (!best) return;
+    const name = el("span", "ms-name");
+    name.textContent = "「" + best.title + "」";
+    if (best.days === 0) {
+      box.append("今天就是 ", name, " ✦");
+    } else {
+      const d = el("span", "ms-days");
+      d.textContent = best.days;
+      box.append("距 ", name, " 还有 ", d, " 天");
+    }
+    box.hidden = false;
+  })();
 }
 
 /* ---------- 3D 旋转相册（无限环） ----------
@@ -287,6 +336,7 @@ function initHome() {
  * 是恒定值、不随缩放变——弧长累加的布局保证了任意缩放下相邻卡片都不遮挡。 */
 const Ring = {
   SLOTS: 30,        // 环上同时存在的卡片数
+  BAND: 37,         // 拍立得下巴：3px 上边 + 34px 白边放标题（对应 css 里 border-width: 3px 3px 34px，别只改一边）
   GAP: 28,          // 相邻卡片的间距（px，沿环的弧长测量）——恒定，不随图片大小设置变
   FRONT_ZOOM: 1.3,  // 最前排卡片相对实际尺寸的放大倍数
   DEF_SPEED: 1.2,   // 默认自转速度（px / 帧；设置面板上线前的老速度是 2.4，减半）
@@ -294,12 +344,21 @@ const Ring = {
   DEF_SIZE: 1.6,    // 默认图片大小（舞台基准的倍数；面板上线前是 1.0）
   SIZE_MIN: 0.5,    // 大小滑条范围
   SIZE_MAX: 2.2,
+  TILT_MIN: -80,    // 俯仰范围：±80°，抬上去能俯瞰整个环（露出后半圈的奶油纸背）
+  TILT_MAX: 80,
+  DEF_ZOOM: 1,      // 镜头远近（乘在环的 scale 上；滚轮/双指/设置面板同一个值）
+  ZOOM_MIN: 0.6,
+  ZOOM_MAX: 1.8,
   cam: 0,           // 相机位置（沿环的弧长 px，单调可正可负）
   velocity: 0,
-  cfg: null,        // { speed, size } 用户设置，loadCfg 从 localStorage 恢复
+  nowIdx: -1,       // 当前朝前卡片的 photoIdx（底部「正在看哪张」一行用它）
+  frontSlot: null,  // 当前最前排的 slot（.is-front 柔光只给它）
+  cfg: null,        // { speed, size, zoom } 用户设置，loadCfg 从 localStorage 恢复
   tilt: -6,
+  assemble: 1,      // 进入组装动画进度 0→1（enter 重置为 0，卡片从中心旋出归位）
+  pinching: false,  // 双指捏合中为 true，此时单指拖拽回调只缩放不转环
   dragging: false,
-  slots: [],        // { el, img, cap, photoIdx, w, h, s }  s = 中心弧长坐标
+  slots: [],        // { el, front, back, img, cap, backName, backDate, photoIdx, w, h, s }  s = 中心弧长坐标
   order: [],        // slots 下标，按环上的先后顺序（order[0] 在队尾方向）
   base: 0,          // order[0] 起始边的绝对弧长坐标
   radius: 0,
@@ -309,27 +368,93 @@ const Ring = {
     this.ring = $("#ring");
     this.stage = $("#ringStage");
     const stage = this.stage;
+    this.floorEl = stage.querySelector(".ring-floor");
     this.build();
     addEventListener("resize", () => this.layout());
 
     // 拖拽 / 单击判定走共用的 makeSceneDrag，单击看大图走共用的 Lightbox
     this.track = makeSceneDrag(stage, (dx, dy) => {
+      if (this.pinching) return; // 双指捏合时只缩放
       this.velocity = dx * 2.4;
       this.cam -= dx * 2.4;
-      this.tilt = Math.max(-24, Math.min(14, this.tilt + dy * 0.08));
+      // 跟手：往下拖 = 把环的上沿压下来 = 俯瞰（看后半圈的背面）；往上拖 = 仰视
+      this.tilt = Math.max(this.TILT_MIN, Math.min(this.TILT_MAX, this.tilt - dy * 0.15));
     });
 
+    // 滚轮推拉镜头（对数步进，手感均匀；与星河同一写法）
+    stage.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      this.zoomBy(Math.exp(-e.deltaY * 0.0009));
+    }, { passive: false });
+
+    // 双指捏合推拉镜头（触屏）：与单指拖拽互斥
+    const pts = new Map();
+    let pinchDist = 0;
+    stage.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "touch") return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) { this.pinching = true; pinchDist = 0; }
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size !== 2) return;
+      const [a, b] = [...pts.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist) this.zoomBy(dist / pinchDist); // 双指张开 → 拉近
+      pinchDist = dist;
+    });
+    const endPinch = (e) => {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) { this.pinching = false; pinchDist = 0; }
+      // 捏合结束剩一根手指继续拖：把拖拽基准挪到这根手指当前位置，避免跳变
+      if (pts.size === 1 && this.track.dragging) {
+        const p = [...pts.values()][0];
+        this.track.lastX = p.x;
+        this.track.lastY = p.y;
+      }
+    };
+    window.addEventListener("pointerup", endPinch);
+    window.addEventListener("pointercancel", endPinch);
+
     const loop = () => {
+      // 进入组装动画：进度缓动收敛到 1（切回本模式时 enter 会重置）
+      if (this.assemble < 1) {
+        this.assemble += (1 - this.assemble) * 0.045;
+        if (this.assemble > 0.995) this.assemble = 1;
+      }
       if (!this.track.dragging) {
-        // 惯性衰减 + 默认缓慢自转（速度可在右上角设置面板调），视角缓慢回正
+        // 惯性衰减 + 默认缓慢自转（速度可在右上角设置面板调）；俯仰不再自动回正，
+        // 用户抬到哪个角度看环，就停在哪个角度
         this.velocity += (-this.cfg.speed - this.velocity) * 0.02;
         this.cam -= this.velocity;
-        this.tilt += (-6 - this.tilt) * 0.02;
+        // 自转关闭时，松手后把最近的一张卡缓缓转正吸附到面前
+        if (this.cfg.speed === 0 && Math.abs(this.velocity) < 0.3) {
+          let nearest = null;
+          for (const s of this.slots) {
+            if (!nearest || Math.abs(s.s - this.cam) < Math.abs(nearest.s - this.cam)) nearest = s;
+          }
+          if (nearest) this.cam += (nearest.s - this.cam) * 0.08;
+        }
       }
-      // 环一倾斜，最前排就会往下掉 R·sin(tilt)（前排还要再乘放大倍数），
-      // 这里按同样的量抬回来，让最前排始终停在画面中间偏上
-      const lift = Math.sin((this.tilt * Math.PI) / 180) * this.radius * this.FRONT_ZOOM * 0.85;
-      this.ring.style.transform = `translateY(${lift.toFixed(1)}px) rotateX(${this.tilt}deg)`;
+      const rad = (this.tilt * Math.PI) / 180;
+      const sinT = Math.sin(rad), cosT = Math.cos(rad);
+      // pull：0 = 平视（|tilt| ≤ 15°，取景与改造前一致）→ 1 = 俯瞰（80°）。
+      // 环在屏幕上的竖直跨度 ≈ 2·R·scale·sinθ，而舞台只有几百像素高，
+      // 所以越俯瞰越要把环整体拉远，否则永远只能看见前排一道弧、看不到后半圈
+      const pull = Math.max(0, (Math.abs(sinT) - 0.2588) / 0.7412);
+      // 必须用 scale3d——CSS 的 scale() 是 2D 的，不缩 z，环会被拉成椭圆
+      const scale = this.cfg.zoom / (1 + 6 * Math.pow(pull, 1.4));
+      // 竖直补偿系数 = 前排居中项（1.1，平视时的老行为：把掉下去的前排抬回来）
+      // 减去俯瞰偏移项（2·pull^1.5·cosT²）：浅俯仰时几乎不影响取景，
+      // 中俯仰时把环往远侧推、后半圈的照片背面才进得了画面；
+      // 到正俯瞰（cosT→0）偏移自动归零，圆环保持居中
+      const liftK = 1.1 * (1 - pull) - 2 * Math.pow(pull, 1.5) * cosT * cosT;
+      const lift = sinT * this.radius * scale * liftK;
+      this.ring.style.transform =
+        `translateY(${lift.toFixed(1)}px) rotateX(${this.tilt.toFixed(2)}deg) scale3d(${scale.toFixed(4)}, ${scale.toFixed(4)}, ${scale.toFixed(4)})`;
+      // 地面光晕随俯仰淡出——俯瞰时它不该还挂在环底下
+      if (this.floorEl) this.floorEl.style.opacity = (1 - 0.8 * Math.abs(sinT)).toFixed(3);
       // 回收：队尾（order[0]）落到后半环就跳到最前端换照片，反向拖动时对称处理。
       // 回收会改变总弧长，可能让另一端越界，因此成对反复检查直到两端都收敛
       let moved = true, guard = 0;
@@ -343,12 +468,41 @@ const Ring = {
           this.recycle(-1); moved = true; guard++;
         }
       }
+      let front = null;
+      const asm = this.assemble;
       for (const s of this.slots) {
         const deg = ((s.s - this.cam) / this.radius) * 180 / Math.PI;
-        s.el.style.transform = `rotateY(${deg}deg) translateZ(${this.radius}px)`;
-        // 正面亮、背面暗一点，增强立体感
-        const c = Math.cos((deg * Math.PI) / 180);
-        s.el.style.filter = `brightness(${(0.72 + 0.28 * Math.max(0, c)).toFixed(3)})`;
+        // 组装动画：角度与半径一起从 0 展开，卡片从中心旋出、逐张归位
+        s.el.style.transform = `rotateY(${(deg * asm).toFixed(2)}deg) translateZ(${(this.radius * asm).toFixed(1)}px)`;
+        // 景深：t=1 正对镜头最亮最饱和，转去背面略暗略灰——
+        // 底噪要留在可读区间（0.78 起），奶油纸背上还写着照片名。
+        // 注意 filter 必须写在两个 face 上、不能写在 card 上：
+        // filter 会把元素强制拍平（transform-style: flat），写在 card 上
+        // 双面翻面的 backface 判定就失效了，背面位置会透出镜像的正面
+        const t = (Math.cos((deg * Math.PI) / 180) + 1) / 2;
+        const dof = `brightness(${(0.78 + 0.22 * t).toFixed(3)}) saturate(${(0.7 + 0.3 * t).toFixed(3)})`;
+        s.front.style.filter = dof;
+        s.back.style.filter = dof;
+        // 组装期间两面整体淡入（opacity 写在 face 上是 3D 安全的；写在 card 上会拍平双面）
+        if (asm < 1) {
+          s.front.style.opacity = asm.toFixed(3);
+          s.back.style.opacity = asm.toFixed(3);
+        } else if (s.front.style.opacity) {
+          s.front.style.opacity = "";
+          s.back.style.opacity = "";
+        }
+        if (!front || Math.abs(s.s - this.cam) < Math.abs(front.s - this.cam)) front = s;
+      }
+      // 最前排换人时，更新底部「正在看哪张」的一行
+      if (front && front.photoIdx !== this.nowIdx) {
+        this.nowIdx = front.photoIdx;
+        this.renderNow(front);
+      }
+      // 前排柔光只给当前最前排的卡（换人才动 class，不每帧写）
+      if (front !== this.frontSlot) {
+        if (this.frontSlot) this.frontSlot.el.classList.remove("is-front");
+        if (front) front.el.classList.add("is-front");
+        this.frontSlot = front;
       }
       requestAnimationFrame(loop);
     };
@@ -356,13 +510,14 @@ const Ring = {
   },
   /* ----- 设置面板的存取（右上角 ⚙ → 3D 相册） ----- */
   loadCfg() {
-    let cfg = { speed: this.DEF_SPEED, size: this.DEF_SIZE };
+    let cfg = { speed: this.DEF_SPEED, size: this.DEF_SIZE, zoom: this.DEF_ZOOM };
     try {
       cfg = Object.assign(cfg, JSON.parse(localStorage.getItem("ringCfg") || "{}"));
     } catch (e) { /* 存了坏数据就回落默认 */ }
     // 越界值（比如手改过 localStorage）夹回滑条范围
     cfg.speed = Math.max(0, Math.min(this.SPEED_MAX, +cfg.speed || 0));
     cfg.size = Math.max(this.SIZE_MIN, Math.min(this.SIZE_MAX, +cfg.size || 0));
+    cfg.zoom = Math.max(this.ZOOM_MIN, Math.min(this.ZOOM_MAX, +cfg.zoom || this.DEF_ZOOM));
     this.cfg = cfg;
     this.velocity = -cfg.speed;
   },
@@ -371,9 +526,15 @@ const Ring = {
   },
   setSpeed(v) { this.cfg.speed = v; this.saveCfg(); },
   setSize(v) { this.cfg.size = v; this.saveCfg(); this.layout(); },
+  setZoom(v) {
+    this.cfg.zoom = Math.max(this.ZOOM_MIN, Math.min(this.ZOOM_MAX, v));
+    this.saveCfg();
+  },
+  zoomBy(f) { this.setZoom(this.cfg.zoom * f); },
   resetCfg() {
     this.cfg.speed = this.DEF_SPEED;
     this.cfg.size = this.DEF_SIZE;
+    this.cfg.zoom = this.DEF_ZOOM;
     this.saveCfg();
     this.layout();
   },
@@ -398,17 +559,27 @@ const Ring = {
     const u = this.unit();
     for (let i = 0; i < this.SLOTS; i++) {
       const card = el("div", "ring-card");
+      // 正面：拍立得（img + 下巴标题）；背面：奶油纸 + 照片名（assign 里填内容）
+      const front = el("div", "ring-face ring-front");
       const img = el("img");
       img.loading = "lazy";
       const cap = el("div", "ring-caption");
-      card.appendChild(img);
-      card.appendChild(cap);
+      front.appendChild(img);
+      front.appendChild(cap);
+      const back = el("div", "ring-face ring-back");
+      const backName = el("div", "ring-back-name");
+      const backDate = el("div", "ring-back-date");
+      back.appendChild(backName);
+      back.appendChild(backDate);
+      card.appendChild(front);
+      card.appendChild(back);
       // 先按 3:4 占位，图片加载完成后 fitCard 按真实宽高比重算
-      const s = { el: card, img, cap, photoIdx: i % PHOTOS.length, w: u * 0.87, h: u * 1.15, s: 0 };
+      const s = { el: card, front, back, img, cap, backName, backDate, photoIdx: i % PHOTOS.length, w: u * 0.87, h: u * 1.15, s: 0 };
       card.style.width = s.w.toFixed(1) + "px";
-      card.style.height = s.h.toFixed(1) + "px";
+      card.style.height = (s.h + this.BAND).toFixed(1) + "px"; // 含拍立得下巴
       card.style.left = (-s.w / 2).toFixed(1) + "px";
-      card.style.top = (-s.h / 2).toFixed(1) + "px";
+      card.style.top = (-s.h / 2 - 3).toFixed(1) + "px"; // 照片部分（不含下巴）居中在锚点上
+      // 点击监听挂在卡片上，正反面都能点开同一张大图
       card.addEventListener("click", () => {
         if (!this.track.moved && s.photoIdx >= 0) Lightbox.open(s.photoIdx);
       });
@@ -471,8 +642,9 @@ const Ring = {
     this.recompute();
     if (front) this.cam = front.s - off;
   },
-  // 页面藏着的时候 stage 量不到尺寸，进来时按真实舞台重排一次
-  enter() { this.layout(); },
+  // 页面藏着的时候 stage 量不到尺寸，进来时按真实舞台重排一次；
+  // 同时重置组装动画，让卡片重新从中心旋出归位
+  enter() { this.assemble = 0; this.layout(); },
   assign(s) {
     const p = PHOTOS[s.photoIdx];
     s.img.alt = photoName(p);
@@ -480,6 +652,9 @@ const Ring = {
     s.img.onload = () => this.fitCard(s);
     setThumb(s.img, p);
     s.cap.textContent = photoName(p);
+    // 奶油纸背：照片名是唯一主角，日期有就带上一小行
+    s.backName.textContent = photoName(p);
+    s.backDate.textContent = p.date || "";
   },
   fitCard(s) {
     const nw = s.img.naturalWidth, nh = s.img.naturalHeight;
@@ -494,11 +669,26 @@ const Ring = {
     s.w = w;
     s.h = h;
     s.el.style.width = w.toFixed(1) + "px";
-    s.el.style.height = h.toFixed(1) + "px";
-    // .ring 是 0×0 的锚点，卡片以它为中心摆
+    s.el.style.height = (h + this.BAND).toFixed(1) + "px"; // 高度含拍立得下巴
+    // .ring 是 0×0 的锚点，照片部分（不含下巴）以它为中心摆
     s.el.style.left = (-w / 2).toFixed(1) + "px";
-    s.el.style.top = (-h / 2).toFixed(1) + "px";
+    s.el.style.top = (-h / 2 - 3).toFixed(1) + "px";
     this.recompute();
+  },
+  // 底部一行衬线小字：正在看的是哪张（标题 + 日期，随最前排卡片更新）
+  renderNow(slot) {
+    if (!this.nowEl) this.nowEl = $("#ringNow");
+    const box = this.nowEl;
+    if (!box) return;
+    const p = PHOTOS[slot.photoIdx];
+    const name = el("span", "rn-name");
+    name.textContent = photoName(p);
+    box.replaceChildren(name);
+    if (p.date) {
+      const d = el("span", "rn-date");
+      d.textContent = p.date;
+      box.appendChild(d);
+    }
   },
 };
 
@@ -556,6 +746,24 @@ const SaturnSky = {
   rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); },
   scaleM(x, y, z) { return new Float32Array([x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]); },
   mat3of(m) { return new Float32Array([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]); },
+
+  /* ===== 相机（Galaxy 每帧调这两个算机位，再把自己的 view 矩阵拿去摆照片；
+   * 两层共用一台相机，对齐原理见 Galaxy 的头注释） ===== */
+  // 相机距离（世界单位）：行星大小设置除进基准距离，zoom 是用户推拉倍率；
+  // 竖屏视野窄，退远一点免得占满整块屏。下限贴在照片环外 10：再近相机就
+  // 钻进照片环里去了（环绕半径可调，下限跟着它走）。
+  camD(zoom, aspect) {
+    const wide = aspect > 1.1;
+    return Math.max(Galaxy.ORBIT_W + 10, (this.DIST / this.scale) * zoom * (wide ? 1 : 1.5));
+  },
+  // 绕原点的轨道机位：az 方位角、elev 仰角（rad）、d 距离
+  eyeFrom(az, elev, d) {
+    return [
+      Math.sin(az) * Math.cos(elev) * d,
+      Math.sin(elev) * d,
+      Math.cos(az) * Math.cos(elev) * d,
+    ];
+  },
 
   /* ===== 着色器 / 缓冲区的小封装 ===== */
   makeProgram(vsrc, fsrc) {
@@ -809,9 +1017,11 @@ const SaturnSky = {
        ${COMMON}
        uniform float uTime;
        uniform float uScale;
+       uniform float uSpin;
        varying float vAlpha;
        void main() {
-         float angle = aAngle + aSpeed * uTime;   // 内圈快、外圈慢
+         // 内圈快、外圈慢；uSpin = 照片环的拖动角：拨动照片时星环同步跟随
+         float angle = aAngle + aSpeed * uTime + uSpin;
          vec4 mv = uView * (uModel * vec4(aRadius * cos(angle), aY, aRadius * sin(angle), 1.0));
          gl_PointSize = max(1.0, aSize * (uScale / -mv.z));
          gl_Position = uProj * mv;
@@ -888,10 +1098,16 @@ const SaturnSky = {
     this.cv.height = Math.max(1, Math.round(h * dpr));
   },
 
-  /* 每帧渲染。lookX / lookY 是拖拽视角（度），叠加在缓慢自转的公转机位上 */
-  render(t, lookX, lookY) {
+  /* 每帧渲染。机位由 Galaxy 统一计算（照片层与土星层共用一台相机，
+   * 对齐原理见 Galaxy 的头注释），这里只收渲染参数：
+   * cam = { eye, pulse, spin }；pulse 是点土星的心跳脉冲（0..1，随帧衰减），
+   * spin 是照片环的拖动角 φ（粒子环同步跟随，自身开普勒自转保留）。 */
+  render(t, cam) {
     const gl = this.gl;
     if (!gl || !this.ready) return;
+    const eye = cam.eye;
+    const pulse = cam.pulse || 0;
+    const breathe = 1 + pulse * 0.03; // 脉冲时行星轻轻呼吸
     const W = this.cv.width, H = this.cv.height;
     gl.viewport(0, 0, W, H);
     // 深度的 clear 受 depthMask 掩码控制，而上一帧结尾（环/辉光 pass）把它关了——
@@ -900,32 +1116,17 @@ const SaturnSky = {
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    // 机位：绕土星缓慢转圈（对应 OrbitControls 的 autoRotate），拖拽环顾时
-    // 叠加轨道角——土星钉在画面正中原地转身，表面特征的扫动方向与照片、
-    // 星幕一致（手指往左拖，三层画面都往左走）：
-    // lookX > 0（往左拖 / 镜头向右看）→ az 增大 → 土星特征向左扫；
-    // lookY > 0（往下拖 / 镜头向上看）→ elev 增大 → 特征向下扫。
-    const az = t * 0.018 + lookX * 0.012; // 约 350 秒转一圈，跟 saturn.html 的 autoRotate 同量级
-    const elev = Math.max(0.06, Math.min(0.9, 0.36 + lookY * 0.008));
     const aspect = W / H;
-    const wide = aspect > 1.1;
-    // scale 是「行星大小」设置（等比例，含星环和辉光——它们都以世界单位画在
-    // 土星旁边，改距离就整体一起变大变小）；竖屏视野窄，退远一点免得占满整块屏
-    const d = (this.DIST / this.scale) * (wide ? 1 : 1.5);
-    const eye = [
-      Math.sin(az) * Math.cos(elev) * d,
-      Math.sin(elev) * d,
-      Math.cos(az) * Math.cos(elev) * d,
-    ];
-    // 土星居中：不额外平移，照片隧道穿过它时靠前后景深自然错开
+    // 土星居中：不额外平移，照片环（CSS 层）与它同心、同机位
     const proj = this.perspective(Math.PI / 4, aspect, 1, 4000, 0, 0);
     const view = this.lookAt(eye, [0, 0, 0]);
     const pxScale = H / 900; // 点的大小跟分辨率走，换屏幕不会忽大忽小
 
-    // 行星：倾角 → 自转 → 压扁；法线要用逆转置，压扁的方向反过来除
+    // 行星：倾角 → 自转 → 压扁；法线要用逆转置，压扁的方向反过来除。
+    // 呼吸是均匀缩放，不影响法线方向，normalMat 不用带 breathe。
     const spin = this.rotY(t * 0.12);
     const tilt = this.rotZ(this.TILT);
-    const planetModel = this.mul(tilt, this.mul(spin, this.scaleM(1, this.FLATTEN, 1)));
+    const planetModel = this.mul(tilt, this.mul(spin, this.scaleM(breathe, breathe * this.FLATTEN, breathe)));
     const normalMat = this.mat3of(this.mul(tilt, this.mul(spin, this.scaleM(1, 1 / this.FLATTEN, 1))));
 
     /* --- 星幕（先画，不写深度） --- */
@@ -950,7 +1151,7 @@ const SaturnSky = {
     gl.uniformMatrix4fv(this.planetProg.u.uModel, false, planetModel);
     gl.uniformMatrix3fv(this.planetProg.u.uNormalMat, false, normalMat);
     gl.uniform3fv(this.planetProg.u.uEye, eye);
-    gl.uniform1f(this.planetProg.u.uExposure, 0.82); // 背景层，压一点曝光免得抢照片
+    gl.uniform1f(this.planetProg.u.uExposure, 0.82 * (1 + 0.3 * pulse)); // 背景层压一点曝光；脉冲时提亮
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.uniform1i(this.planetProg.u.uTex, 0);
@@ -968,166 +1169,497 @@ const SaturnSky = {
     gl.uniformMatrix4fv(this.ringProg.u.uView, false, view);
     gl.uniformMatrix4fv(this.ringProg.u.uModel, false, tilt);
     gl.uniform1f(this.ringProg.u.uTime, t);
+    gl.uniform1f(this.ringProg.u.uSpin, cam.spin || 0);
     gl.uniform1f(this.ringProg.u.uScale, 380 * pxScale);
     gl.uniform3f(this.ringProg.u.uColor, 0.88, 0.8, 0.62);
     gl.drawArrays(gl.POINTS, 0, this.RING_COUNT);
 
-    /* --- 大气辉光 --- */
+    /* --- 大气辉光（脉冲时光晕涨一点） --- */
     this.use(this.haloProg, this.haloBuf, [["aQuad", 2, 0]], 2);
     gl.uniformMatrix4fv(this.haloProg.u.uProj, false, proj);
     gl.uniformMatrix4fv(this.haloProg.u.uView, false, view);
-    gl.uniform2f(this.haloProg.u.uSize, 26, 23);
+    gl.uniform2f(this.haloProg.u.uSize, 26 * (1 + 0.3 * pulse), 23 * (1 + 0.3 * pulse));
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   },
 };
 
-/* ---------- 星河漫游 ----------
- * 照片散落在一条 3D 隧道里，相机匀速向前穿梭；
- * 隧道里同一时刻只保留少量照片槽位，飞过身后的槽位回收并
- * 换成未出场的照片，循环展示全集，控制内存与渲染开销。
- * 背景层：远处一颗 WebGL 土星（SaturnSky）+ canvas 星幕（深度视差 + 闪烁）+ 流星雨。
- * 右上角设置面板（ModeSettings）能调四样：照片移动速度 / 行星大小 /
- * 单次照片数量 / 照片消失距离。 */
+/* ---------- 星河漫游：土星环上的照片 ----------
+ * 照片挂在一条与土星粒子环同心、共面（同 26.7° 转轴倾角）的外侧轨道上，
+ * 像环上的卫星一样绕土星公转：左右拖 = 拨动星环（粒子环经 ringProg 的
+ * uSpin = φ 同步跟随，自身仍保留开普勒差速自转），上下拖 = 相机仰角
+ * （松手保持不弹回），滚轮/双指 = 推拉远近；土星始终屏幕居中。
+ *
+ * 同时在环上的照片数量有限（设置面板「照片数量」可调，默认 48）：总数超出时，
+ * 照片转到离镜头最远的弧点就淡出并接力换成下一张（recycle，tail +1 保证
+ * 不重复、遍历全相册），在途缩略图始终只有一小批，不会一次性拉动整个相册的下载。
+ *
+ * 两层对齐（本页的地基，改相机前先读）：
+ * 照片是 CSS 3D，土星是 WebGL，两层共用一台相机——每帧由 Galaxy 算出
+ * 机位（az 缓慢公转 + elev/zoom），经 SaturnSky.eyeFrom / lookAt 得
+ * view 矩阵：一份传给 SaturnSky.render 画土星，一份用来摆照片。
+ * CSS 侧取 perspective P = (stageH/2)/tan(22.5°)，与 WebGL fovy=45°
+ * 精确等价。关键是摆法：CSS 合成器对 translate3d(x, y, z) 整体再做一次
+ * P/(P−z) 投影缩放，所以 x/y 必须直接摆 view 空间坐标（乘 px 换算 kPx）、
+ * 投影交给 CSS——translate3d(vx·kPx, −vy·kPx, P+vz·kPx) 的落点正好是
+ * (P·vx/(−vz), −P·vy/(−vz))，与 WebGL 逐像素一致。若 x/y 预先除以 −vz
+ * 「帮」它投影，会被合成器二次缩放：照片环整体往中心塌、越远塌得越狠，
+ * 与粒子环明显错开（曾经的 bug，数值验证：旧方案偏差最多 706px，新方案 0）。
+ * 元素不旋转即正对镜头，因为 view 空间里相机永远朝 −z 看。
+ * 照片转到土星背后时被行星「掩食」：按屏幕距离平滑淡出（rS = 21·P/d）。
+ * 右上角设置面板（ModeSettings）能调五样：星环自转速度 / 行星大小 / 照片大小 /
+ * 照片数量 / 环绕半径。 */
 const Galaxy = {
-  DEPTH: 7000,         // 隧道总长（px）
-  PERSPECTIVE: 900,    // 与 .galaxy-stage 的 perspective 保持一致
+  TILT: SaturnSky.TILT, // 与土星转轴倾角一致：照片环与粒子环共面
+  ORBIT_W: 69,          // 照片轨道半径（世界单位，「环绕半径」设置的当前值，初值=DEF_ORBIT）
+  PLANET_R: 21,         // 掩食/点按判定用的行星视半径（本体 20 + 一点余量）
+  ELEV_DEF: 0.36,       // 相机仰角默认值（rad）
+  ELEV_MIN: 0.08,
+  ELEV_MAX: 1.15,
+  ZOOM_DEF: 0.95,       // 相机距离倍率（乘在 DIST/scale 上，见 SaturnSky.camD）
+  ZOOM_MIN: 0.75,
+  ZOOM_MAX: 2.8,
   /* ----- 设置面板各项：默认值 + 滑条范围（存 localStorage，见 loadCfg） ----- */
-  DEF_SPEED: 2.4,      // 照片朝镜头（屏幕外）移动的基础速度，单位约为 px/帧
-  SPEED_MIN: 0.4,
-  SPEED_MAX: 8,
-  DEF_PLANET: 1.8,     // 行星大小：等比例缩放土星（含星环），直接作用在 SaturnSky.scale
+  DEF_SPEED: 0.02,      // 星环自转默认速度（度/帧；整圈约 5 分钟）
+  SPEED_MAX: 0.08,
+  DEF_PLANET: 1.8,      // 行星大小：等比例缩放土星（含星环），直接作用在 SaturnSky.scale
   PLANET_MIN: 0.5,
   PLANET_MAX: 3.0,
-  DEF_SLOTS: innerWidth < 768 ? 10 : 18, // 单次照片数默认值：小屏少一些
-  MIN_SLOTS: 4,
-  MAX_SLOTS: 50,
-  VISIBLE_DEPTH: 4600, // 进入这个深度才显示并加载缩略图，控制内存和流量
-  DEF_NEAR: 300,       // 照片距镜头这么近时消失；值越小，照片越晚消失
-  MIN_NEAR: 100,
-  MAX_NEAR: 1200,
-  cam: 0,
-  speedBoost: 0,
-  lookX: 0,
-  lookY: 0,
-  items: [], // 照片槽位 { el, img, src, full, x, y, z, photoIdx, visible, loaded }
-  stars: [], // 星幕粒子
-  nextPhoto: 0,
-  nextShoot: 0,
+  DEF_SIZE: 1.5,        // 照片大小（基准卡宽的倍数）
+  SIZE_MIN: 0.6,
+  SIZE_MAX: 1.8,
+  DEF_COUNT: 48,        // 同时在环的照片数量默认；总数超出就在最远弧点回收换图
+  COUNT_MIN: 4,
+  COUNT_MAX: 60,        // 上限防卡顿、防下载风暴：在途缩略图始终只有一小批
+  DEF_ORBIT: 69,        // 环绕半径默认（世界单位）：按显示基准 ORBIT_REF 算是 86%
+  ORBIT_MIN: 64,        // 粒子环外沿 58 之外，至少留一道缝
+  ORBIT_MAX: 130,
+  ORBIT_REF: 80,        // 「环绕半径」滑条的百分比显示基准（100% = 原默认 80）
+  AUTO_AZ: 0.018,       // 机位绕土星的缓慢公转（rad/s），与 saturn.html 的 autoRotate 同量级
+  NEAR_SCALE: 0.68,     // 照片转到离镜头最近点时的屏显尺寸 = 卡片 px 尺寸 × 此值（layout 用它反推 kPx）
+  VIEWS: {              // 视角预设（右下角胶囊按钮；双击空白处复位）
+    far:  { zoom: 2.3,  elev: 0.62 },  // 远景：整条光环 + 中央小土星
+    ring: { zoom: 1.05, elev: 0.10 },  // 环面：贴着环面看照片列队掠过
+    near: { zoom: 0.78, elev: 0.32 },  // 近观：照片从身边飞过
+  },
+
+  phi: 0,               // 星环自转角（rad，同时喂给粒子环的 uSpin）
+  phiVel: 0,            // 拖动惯性（rad/帧）
+  elev: 0, zoom: 0,     // 当前仰角 / 距离倍率（拖拽后保持）
+  pulse: 0,             // 土星心跳脉冲（0..1，随帧衰减）
+  items: [],            // { el, img, cap, photoIdx, theta, r, yJ, ready, op, br, sc, lastDepth, prevRel, lastSwap }
+  tail: -1,             // 环上最新一张的 photoIdx；回收时 +1 接力
+  recycling: false,     // 总数 > 在环数量（cfg.count）时才回收
+  stars: [],            // 星幕粒子（世界坐标壳层）
+  hovered: null,
   running: false,
-  cfg: null,   // { speed, planet, slots, near } 用户设置，loadCfg 从 localStorage 恢复
+  enteredOnce: false,
+  fly: null,            // 视角飞行 { t0, dur, from:{elev,zoom}, to:{elev,zoom} }
+  cfg: null,            // { speed, planet, size, count, orbit } 用户设置，loadCfg 从 localStorage 恢复
+  rebuildTimer: 0,      // 「照片数量」滑条防抖：连续拖动时不反复重建
+  kPx: 12,              // px/世界单位换算（layout 按 NEAR_SCALE 反推，与照片数量无关）
+  radius: 1000,         // = kPx·ORBIT_W，仅供 spinK 手感公式用
+  spinK: 3e-4,          // 每 px 拖动对应的环转角（rad，layout 按几何重算）
+
   init() {
+    this.reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
     this.loadCfg();
+    this.elev = this.ELEV_DEF;
+    this.zoom = this.ZOOM_DEF;
+    this.pinching = false;
+    this.pinchDist = 0;
+    this.suppressClickUntil = 0;
+    this.mouseAt = null;
+    this.hoverDirty = false;
     this.stage = $("#galaxyStage");
     this.space = $("#galaxySpace");
-    this.buildSlots();
+    this.buildPhotos();
     // 背景星幕（土星那层等首次进入时再建，见 enter）
     this.initStarfield();
-
-    // 拖拽方向约定：跟手——往左拖场景往左走（相当于镜头往右看），上下同理，
-    // 照片、星幕、土星三层全部一致。不用 setPointerCapture。
-    this.track = makeSceneDrag(this.stage, (dx, dy) => {
-      this.lookX = Math.max(-32, Math.min(32, this.lookX - dx * 0.06));
-      this.lookY = Math.max(-24, Math.min(24, this.lookY + dy * 0.06));
-    });
-    // 左键 / 触屏点按看大图。Chromium 的 preserve-3d 命中检测打不到位于
-    // stage 背景平面之后（translateZ 为负）的照片，click 总落在 stage 上，
-    // 所以按 getBoundingClientRect 手动命中；若浏览器正常命中了照片本身
-    // （照片上有自己的 click 监听），closest 检查会跳过这里，不会重复打开。
-    this.stage.addEventListener("click", (e) => {
-      if (e.button !== 0 || this.track.moved) return;
-      if (e.target.closest && e.target.closest(".galaxy-photo")) return;
-      let hit = null, best = Infinity;
-      for (const it of this.items) {
-        if (!it.visible) continue;
-        const r = it.el.getBoundingClientRect();
-        if (e.clientX < r.left || e.clientX > r.right ||
-            e.clientY < r.top || e.clientY > r.bottom) continue;
-        const rel = it.z - this.cam; // 重叠时离镜头近（视觉最前）的优先
-        if (rel < best) { best = rel; hit = it; }
-      }
-      if (hit) Lightbox.open(hit.photoIdx);
-    });
-    // 滚轮加速 / 减速穿梭
-    this.stage.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      this.speedBoost = Math.max(-2, Math.min(14, this.speedBoost - e.deltaY * 0.01));
-    }, { passive: false });
+    this.bindInput();
+    addEventListener("resize", () => this.layout());
 
     const loop = () => {
-      if (this.running) {
-        this.speedBoost *= 0.97; // 加速效果衰减
-        this.cam += Math.max(this.SPEED_MIN, this.cfg.speed + this.speedBoost);
-        this.lookX *= 0.995;
-        this.lookY *= 0.995;
-        this.space.style.transform =
-          `rotateY(${this.lookX}deg) rotateX(${this.lookY}deg) translateZ(${this.cam}px)`;
-        for (const it of this.items) {
-          const rel = it.z - this.cam;
-          if (rel <= this.cfg.near) {
-            // 到达用户设置的最近距离：回收送到隧道尽头，并换成下一张未出场的照片
-            it.z += this.DEPTH;
-            it.photoIdx = this.nextPhoto % PHOTOS.length;
-            this.nextPhoto++;
-            const p = PHOTOS[it.photoIdx];
-            it.img.alt = photoName(p);
-            it.src = thumbSrc(p);
-            it.full = p.src;
-            it.loaded = false;
-            // 清掉上一张照片的宽高比样式，等新图加载后重新计算
-            it.el.style.width = "";
-            it.el.style.aspectRatio = "";
-            this.place(it);
-            it.visible = false;
-            it.el.style.visibility = "hidden";
-            it.el.style.opacity = "0";
-            continue;
-          }
-          const vis = rel < this.VISIBLE_DEPTH;
-          if (vis !== it.visible) {
-            it.visible = vis;
-            it.el.style.visibility = vis ? "" : "hidden";
-            it.el.style.opacity = vis ? "1" : "0"; // 远处淡入，不硬闪出来
-            // 进入可视深度才开始加载，避免一次性拉全部原图
-            if (vis && !it.loaded) {
-              it.loaded = true;
-              it.img.onerror = () => { it.img.onerror = null; it.img.src = it.full; };
-              it.img.src = it.src;
-            }
-          }
-        }
-        this.drawStars();
-        SaturnSky.render(performance.now() / 1000, this.lookX, this.lookY);
-        this.maybeShoot();
-      }
+      if (this.running) this.frame();
       requestAnimationFrame(loop);
     };
     loop();
   },
-  place(it) {
-    it.el.style.transform =
-      `translate(-50%, -50%) translate3d(${it.x}vw, ${it.y}vh, ${-it.z}px)`;
+
+  /* ----- 建造：槽位上环，数量为设置面板的「照片数量」；总数超出时运转中回收换图 ----- */
+  buildPhotos() {
+    this.space.innerHTML = "";
+    this.items = [];
+    this.hovered = null; // 重建后旧元素已摘除，悬停引用一并清掉
+    const total = PHOTOS.length;
+    if (!total) return;
+    const n = Math.min(total, this.cfg.count);
+    this.recycling = total > n; // 照片不多于槽位：全挂上，无需回收
+    this.tail = n - 1;
+    for (let i = 0; i < n; i++) {
+      const p = PHOTOS[i];
+      const it = {
+        el: el("div", "galaxy-photo"),
+        img: el("img"),
+        cap: el("div", "gp-cap"),
+        photoIdx: i,
+        theta: (i / n) * Math.PI * 2,   // 等角分布
+        r: this.ORBIT_W + rand(-2, 2),  // 半径抖动：避免相邻卡片严格共面闪面
+        yJ: rand(-2.5, 2.5),            // 垂直环面的厚度抖动（世界单位）
+        ready: false, op: 0, br: 0.8, sc: 1, lastDepth: 1e9,
+        prevRel: null, lastSwap: 0,
+      };
+      it.img.alt = photoName(p);
+      it.img.decoding = "async";
+      // 图片加载完成前整卡隐身（不然环上挂着一排深色占位块）；加载后按真实
+      // 宽高比重定相框（横图横放、竖图竖放，不裁剪）。回收换图也走这条路：
+      // recycle 把 ready 置 0 先淡出，新图 onload 后淡入
+      it.img.onload = () => { it.ready = true; this.fitCard(it); };
+      it.cap.textContent = photoName(p);
+      it.el.appendChild(it.img);
+      it.el.appendChild(it.cap);
+      // 浏览器若能正常命中（preserve-3d 打得到）就直接开灯箱；打不到时
+      // 由 stage 的手动矩形命中兜底（见 bindInput，两条路不会重复打开）
+      it.el.addEventListener("click", (e) => {
+        if (e.button === 0 && !this.track.moved) Lightbox.open(it.photoIdx);
+      });
+      this.space.appendChild(it.el);
+      this.fitCard(it);
+      this.items.push(it);
+      setThumb(it.img, p); // 槽位数量有限，直接开始加载
+    }
+    this.layout();
+  },
+  // 卡片基准边长 u：横竖图等面积缩放的基准，跟舞台大小走，乘「照片大小」设置
+  cardU() {
+    const w = (this.stage && this.stage.clientWidth) || innerWidth;
+    const h = (this.stage && this.stage.clientHeight) || innerHeight;
+    return Math.max(96, Math.min(0.17 * h, 0.16 * w, 175)) * this.cfg.size;
+  },
+  fitCard(it) {
+    const u = this.cardU();
+    const nw = it.img.naturalWidth, nh = it.img.naturalHeight;
+    let w, h;
+    if (nw && nh) {
+      const ar = nw / nh;
+      // 等面积：宽 = u·√比例、高 = u/√比例；极端宽幅全景另给上限
+      const k = Math.sqrt(Math.min(Math.max(ar, 0.3), 3));
+      w = Math.min(u * k, u * 1.8);
+      h = w / ar;
+    } else {
+      w = u * 0.87; h = u * 1.15; // 未加载先按 3:4 占位
+    }
+    it.el.style.width = w.toFixed(1) + "px";
+    it.el.style.height = h.toFixed(1) + "px";
+  },
+  // 舞台尺寸 / 照片大小设置变化时：重算 perspective、px 换算、拖拽手感、卡片尺寸
+  layout() {
+    const W = this.stage.clientWidth || innerWidth;
+    const H = this.stage.clientHeight || innerHeight;
+    // 与 WebGL fovy=45° 精确等价的 CSS 视距（两层对齐的地基）
+    const P = (H / 2) / Math.tan(Math.PI / 8);
+    this.stage.style.perspective = Math.round(P) + "px";
+    // kPx（px/世界单位）与照片数量无关：按「最近点的照片屏显尺寸 ≈ 卡片
+    // px 尺寸 × NEAR_SCALE」反推。d 给下限兜底：相机贴环时 kPx 不爆表
+    const d = Math.max(SaturnSky.camD(this.zoom, W / H), this.ORBIT_W + 30);
+    this.kPx = (P / this.NEAR_SCALE) / (d - this.ORBIT_W);
+    this.radius = this.kPx * this.ORBIT_W; // 仅供下面 spinK 的手感公式用
+    // 拨环手感：近侧照片 1:1 跟手所需的环转角/px，再乘 2.2 增益
+    const nearDepth = (d - this.ORBIT_W) * this.kPx;
+    this.spinK = (2.2 * nearDepth) / (P * this.radius);
+    for (const it of this.items) this.fitCard(it);
+    this.resizeStars();
+  },
+
+  /* ----- 每帧 ----- */
+  frame() {
+    const W = this.stage.clientWidth || innerWidth;
+    const H = this.stage.clientHeight || innerHeight;
+    if (!W || !H) return;
+    const t = performance.now() / 1000;
+
+    // 视角飞行（预设机位 / 双击复位 / 首次进场）；拖拽与推拉会取消它
+    if (this.fly) {
+      const f = this.fly;
+      const k = Math.min(1, (t - f.t0) / f.dur);
+      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; // easeInOut
+      this.elev = f.from.elev + (f.to.elev - f.from.elev) * e;
+      this.zoom = f.from.zoom + (f.to.zoom - f.from.zoom) * e;
+      if (k >= 1) this.fly = null;
+    }
+
+    // 环自转：松手后惯性衰减、缓回默认速度；悬停某张时放慢到 15% 方便细看
+    if (!this.track.dragging) {
+      const auto = (this.reduceMotion ? 0 : this.cfg.speed) * (Math.PI / 180);
+      const target = this.hovered ? auto * 0.15 : auto;
+      this.phiVel += (target - this.phiVel) * 0.03;
+      this.phi += this.phiVel;
+    }
+    this.pulse *= 0.94;
+
+    // 相机：两层共用这一份（对齐原理见头注释）
+    const az = t * this.AUTO_AZ;
+    const d = SaturnSky.camD(this.zoom, W / H);
+    const eye = SaturnSky.eyeFrom(az, this.elev, d);
+    const view = SaturnSky.lookAt(eye, [0, 0, 0]);
+    const P = (H / 2) / Math.tan(Math.PI / 8);
+    const kPx = this.kPx;
+    const cosT = Math.cos(this.TILT), sinT = Math.sin(this.TILT);
+    const rS = (this.PLANET_R * P) / d; // 土星的屏幕视半径（掩食判定用）
+    const nearDepth = (d - this.ORBIT_W) * kPx;
+    // 环坐标下离镜头最远的角（含倾角与仰角修正）：回收换图在这里发生
+    const cosE = Math.cos(this.elev);
+    const farTh = Math.atan2(-Math.cos(az) * cosE,
+      -(cosT * Math.sin(az) * cosE + sinT * Math.sin(this.elev)));
+    const nowMs = performance.now();
+
+    for (const it of this.items) {
+      const th = it.theta + this.phi;
+      // 最远弧点回收：与 farTh 的角差跨过 0（且两帧都在远半环，排除 ±π
+      // 处在近点绕回）→ 淡出换下一张。来回拖时靠 lastSwap 冷却防止反复横跳
+      if (this.recycling) {
+        let rel = (th - farTh) % (Math.PI * 2);
+        if (rel > Math.PI) rel -= Math.PI * 2;
+        else if (rel < -Math.PI) rel += Math.PI * 2;
+        if (it.prevRel !== null && (it.prevRel < 0) !== (rel < 0) &&
+            Math.abs(it.prevRel) < Math.PI / 2 && Math.abs(rel) < Math.PI / 2 &&
+            nowMs - it.lastSwap > 1200) {
+          this.recycle(it);
+        }
+        it.prevRel = rel;
+      }
+      // 世界坐标：环面 = y≈0 平面经 rotZ(TILT) 倾斜，与 WebGL 粒子环共面
+      const wx0 = it.r * Math.cos(th), wz0 = it.r * Math.sin(th);
+      const wx = wx0 * cosT - it.yJ * sinT;
+      const wy = wx0 * sinT + it.yJ * cosT;
+      // view 矩阵（列主序 Float32Array：行即相机基向量，m[12..14] 是平移）
+      const vx = view[0] * wx + view[4] * wy + view[8] * wz0 + view[12];
+      const vy = view[1] * wx + view[5] * wy + view[9] * wz0 + view[13];
+      const vz = view[2] * wx + view[6] * wy + view[10] * wz0 + view[14];
+      const depth = -vz * kPx; // 离镜头的距离（css px，前方为正）
+      if (depth < 30) { // 极端机位下相机贴脸：藏掉，免得投影爆掉
+        it.op = 0; it.lastDepth = 1e9;
+        it.el.style.opacity = "0";
+        continue;
+      }
+      it.lastDepth = depth;
+      // 屏幕坐标（仅供掩食判定；摆放不经过它，见头注释）
+      const inv = P / -vz;
+      const sx = vx * inv, sy = -vy * inv;
+      // 近亮远暗
+      const depthK = Math.max(0, Math.min(1, (depth - nearDepth) / (2 * this.ORBIT_W * kPx)));
+      let brT = 1.02 - 0.55 * depthK;
+      // 未加载完成（含回收换图途中）的不现身（op 从 0 缓动淡入）
+      let opT = it.ready ? 1 : 0;
+      // 掩食：在行星背后（与相机异侧）且落入行星视圆盘 → 平滑淡出
+      if (opT && wx * eye[0] + wy * eye[1] + wz0 * eye[2] < 0) {
+        opT = Math.max(0, Math.min(1, (Math.hypot(sx, sy) - rS) / (0.3 * rS)));
+      }
+      let scT = 1;
+      if (this.hovered === it) { scT = 1.12; brT *= 1.15; }
+      it.op += (opT - it.op) * 0.2;
+      it.br += (brT - it.br) * 0.2;
+      it.sc += (scT - it.sc) * 0.2;
+      // x/y 直接摆 view 空间坐标，投影交给 CSS（对齐原理见头注释）
+      it.el.style.transform =
+        `translate(-50%,-50%) translate3d(${(vx * kPx).toFixed(1)}px, ${(-vy * kPx).toFixed(1)}px, ${(P - depth).toFixed(1)}px) scale(${it.sc.toFixed(3)})`;
+      it.el.style.opacity = it.op.toFixed(3);
+      it.el.style.filter = `brightness(${it.br.toFixed(3)})`;
+    }
+
+    SaturnSky.render(t, { eye, pulse: this.pulse, spin: this.phi });
+    this.drawStars(view, P, W, H);
+    this.maybeShoot();
+    if (this.hoverDirty) {
+      this.hoverDirty = false;
+      this.setHovered(this.mouseAt ? this.hitPhoto(this.mouseAt[0], this.mouseAt[1]) : null);
+    }
+  },
+
+  /* ----- 输入：拖拽 / 点击 / 滚轮 / 双指 / 键盘 / 悬停 / 预设按钮 ----- */
+  bindInput() {
+    // 拖拽 / 单击判定走共用的 makeSceneDrag。
+    // 左右拨环跟手：环近点的切向速度在屏幕 x 方向的分量恒为 −1（把近点角
+    // θn = π/2−az 的切向量点乘相机 x̂ 即得），所以 φ 减去 dx·spinK 时
+    // 近侧照片跟着手指走；上下拖 = 相机仰角（往下拖 = 抬镜头），松手保持。
+    this.track = makeSceneDrag(this.stage, (dx, dy) => {
+      if (this.pinching) return; // 双指捏合时只缩放
+      this.fly = null;           // 手动接管，取消视角飞行
+      this.phi -= dx * this.spinK;
+      this.phiVel = -dx * this.spinK;
+      this.elev = Math.max(this.ELEV_MIN, Math.min(this.ELEV_MAX, this.elev + dy * 0.0022));
+    });
+
+    // 左键 / 触屏点按：先命中照片看大图（手动矩形命中——Chromium 的
+    // preserve-3d 命中检测打不到位于 stage 背景平面之后的照片；若浏览器
+    // 正常命中了照片自身，closest 检查会跳过这里，不会重复打开），
+    // 没点中照片再看是不是点了土星：心跳脉冲。
+    this.stage.addEventListener("click", (e) => {
+      if (e.button !== 0 || this.track.moved) return;
+      if (performance.now() < this.suppressClickUntil) return;
+      if (e.target.closest && e.target.closest(".galaxy-photo, .galaxy-views")) return;
+      const hit = this.hitPhoto(e.clientX, e.clientY);
+      if (hit) { Lightbox.open(hit.photoIdx); return; }
+      const r = this.stage.getBoundingClientRect();
+      const P = (r.height / 2) / Math.tan(Math.PI / 8);
+      const d = SaturnSky.camD(this.zoom, r.width / r.height);
+      const rS = (this.PLANET_R * P) / d;
+      if (Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) < rS) {
+        this.poke();
+      }
+    });
+
+    // 滚轮推拉相机（对数步进，手感均匀）
+    this.stage.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      this.zoomBy(Math.exp(e.deltaY * 0.0009));
+    }, { passive: false });
+
+    // 双指捏合推拉（触屏）：与单指拖拽互斥
+    const pts = new Map();
+    this.stage.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "touch") return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) { this.pinching = true; this.pinchDist = 0; }
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size !== 2) return;
+      const [a, b] = [...pts.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (this.pinchDist) {
+        this.zoomBy(this.pinchDist / dist); // 双指张开 → 拉近
+        this.suppressClickUntil = performance.now() + 400;
+      }
+      this.pinchDist = dist;
+    });
+    const endPinch = (e) => {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) { this.pinching = false; this.pinchDist = 0; }
+    };
+    window.addEventListener("pointerup", endPinch);
+    window.addEventListener("pointercancel", endPinch);
+
+    // 双击空白处：视角缓动回默认（双击到照片则照常进灯箱，不复位）
+    this.stage.addEventListener("dblclick", (e) => {
+      if (e.target.closest && e.target.closest(".galaxy-views")) return;
+      if (this.hitPhoto(e.clientX, e.clientY)) return;
+      this.resetView();
+    });
+
+    // 悬停（仅鼠标类设备）：环放慢 + 卡片提亮 + 浮出标题
+    if (matchMedia("(hover: hover)").matches) {
+      this.stage.addEventListener("pointermove", (e) => {
+        if (e.buttons) return;
+        this.mouseAt = [e.clientX, e.clientY];
+        this.hoverDirty = true;
+      });
+      this.stage.addEventListener("pointerleave", () => {
+        this.mouseAt = null;
+        this.hoverDirty = true;
+      });
+    }
+
+    // 键盘：←/→ 拨环，↑/↓ 仰角，+/− 远近，0 复位
+    document.addEventListener("keydown", (e) => {
+      if (document.body.dataset.mode !== "galaxy") return;
+      if ($("#lightbox").classList.contains("open")) return;
+      if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+      const kick = 1.6 * (Math.PI / 180);
+      if (e.key === "ArrowLeft") this.phiVel += kick;
+      else if (e.key === "ArrowRight") this.phiVel -= kick;
+      else if (e.key === "ArrowUp") {
+        this.fly = null;
+        this.elev = Math.min(this.ELEV_MAX, this.elev + 0.06);
+        e.preventDefault();
+      } else if (e.key === "ArrowDown") {
+        this.fly = null;
+        this.elev = Math.max(this.ELEV_MIN, this.elev - 0.06);
+        e.preventDefault();
+      } else if (e.key === "+" || e.key === "=") this.zoomBy(0.9);
+      else if (e.key === "-") this.zoomBy(1 / 0.9);
+      else if (e.key === "0") this.resetView();
+    });
+
+    // 视角预设按钮；按钮上不启动拖拽（免得从按钮上拖出误操作）
+    const views = document.querySelector(".galaxy-views");
+    if (views) {
+      views.addEventListener("pointerdown", (e) => e.stopPropagation());
+      views.querySelectorAll("[data-view]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const v = this.VIEWS[b.dataset.view];
+          if (v) this.flyTo(v, 1.0);
+        })
+      );
+    }
+  },
+  // 手动矩形命中：返回被指到的、视觉最前的照片（getBoundingClientRect
+  // 给出的就是 3D 投影后的屏幕包围盒）
+  hitPhoto(x, y) {
+    let hit = null, best = Infinity;
+    for (const it of this.items) {
+      if (it.op < 0.25) continue;
+      const r = it.el.getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+      if (it.lastDepth < best) { best = it.lastDepth; hit = it; }
+    }
+    return hit;
+  },
+  setHovered(it) {
+    if (this.hovered === it) return;
+    if (this.hovered) this.hovered.el.classList.remove("hovered");
+    this.hovered = it;
+    if (it) it.el.classList.add("hovered");
+  },
+  // 点了土星：心跳脉冲（行星轻轻提亮、呼吸一下）
+  poke() {
+    this.pulse = 1;
+  },
+  zoomBy(f) {
+    this.fly = null;
+    this.zoom = Math.max(this.ZOOM_MIN, Math.min(this.ZOOM_MAX, this.zoom * f));
+  },
+  flyTo(v, dur) {
+    this.fly = {
+      t0: performance.now() / 1000,
+      dur: dur || 0.9,
+      from: { elev: this.elev, zoom: this.zoom },
+      to: { elev: v.elev, zoom: v.zoom },
+    };
+  },
+  resetView() { this.flyTo({ elev: this.ELEV_DEF, zoom: this.ZOOM_DEF }, 1.1); },
+  // 最远弧点回收：该处照片最小最暗（还时常被土星掩食），淡出换图最不显眼。
+  // tail 接力 +1，环上照片互不重复、持续遍历整个相册
+  recycle(it) {
+    it.lastSwap = performance.now();
+    this.tail = (this.tail + 1) % PHOTOS.length;
+    it.photoIdx = this.tail;
+    const p = PHOTOS[it.photoIdx];
+    it.ready = false; // 触发淡出；新缩略图 onload 后自动淡入（见 buildPhotos）
+    it.img.alt = photoName(p);
+    it.cap.textContent = photoName(p);
+    setThumb(it.img, p);
   },
 
   /* ----- 设置面板的存取（右上角 ⚙ → 星河漫游） ----- */
   loadCfg() {
-    let cfg = {
-      speed: this.DEF_SPEED,
-      planet: this.DEF_PLANET,
-      slots: this.DEF_SLOTS,
-      near: this.DEF_NEAR,
-    };
+    let cfg = { speed: this.DEF_SPEED, planet: this.DEF_PLANET, size: this.DEF_SIZE,
+                count: this.DEF_COUNT, orbit: this.DEF_ORBIT };
     try {
-      cfg = Object.assign(cfg, JSON.parse(localStorage.getItem("galaxyCfg") || "{}"));
+      const raw = JSON.parse(localStorage.getItem("galaxyCfg") || "{}");
+      // 隧道时代的 slots/near/depth 语义已不存在，丢弃
+      delete raw.slots; delete raw.near; delete raw.depth;
+      cfg = Object.assign(cfg, raw);
     } catch (e) { /* 存了坏数据就回落默认 */ }
-    // 旧版 depth 表示远处开始显示的位置，语义与新版相反，不能沿用。
-    delete cfg.depth;
     // 越界值（比如手改过 localStorage）夹回滑条范围
     const clamp = (v, lo, hi, dflt) => (isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dflt);
-    cfg.speed = clamp(+cfg.speed, this.SPEED_MIN, this.SPEED_MAX, this.DEF_SPEED);
+    cfg.speed = clamp(+cfg.speed, 0, this.SPEED_MAX, this.DEF_SPEED);
     cfg.planet = clamp(+cfg.planet, this.PLANET_MIN, this.PLANET_MAX, this.DEF_PLANET);
-    cfg.slots = Math.round(clamp(+cfg.slots, this.MIN_SLOTS, this.MAX_SLOTS, this.DEF_SLOTS));
-    cfg.near = clamp(+cfg.near, this.MIN_NEAR, this.MAX_NEAR, this.DEF_NEAR);
+    cfg.size = clamp(+cfg.size, this.SIZE_MIN, this.SIZE_MAX, this.DEF_SIZE);
+    cfg.count = Math.round(clamp(+cfg.count, this.COUNT_MIN, this.COUNT_MAX, this.DEF_COUNT));
+    cfg.orbit = clamp(+cfg.orbit, this.ORBIT_MIN, this.ORBIT_MAX, this.DEF_ORBIT);
     this.cfg = cfg;
+    this.ORBIT_W = cfg.orbit;
     SaturnSky.scale = cfg.planet;
   },
   saveCfg() {
@@ -1135,68 +1667,33 @@ const Galaxy = {
   },
   setSpeed(v) { this.cfg.speed = v; this.saveCfg(); },
   setPlanet(v) { this.cfg.planet = v; this.saveCfg(); SaturnSky.scale = v; },
-  // 同屏照片数实时增减：新增的槽位生成在当前机位前方的隧道深处，飞近了
-  // 自然淡入；减少的从末尾摘掉，其余照片的分布不受影响
-  setSlots(v) {
-    this.cfg.slots = Math.round(v);
-    this.saveCfg();
-    this.buildSlots();
+  setSize(v) { this.cfg.size = v; this.saveCfg(); this.layout(); },
+  // 环绕半径：不动 DOM，各槽位半径整体平移（保留各自 ±2 的抖动量），下一帧生效
+  setOrbit(v) {
+    const dv = v - this.ORBIT_W;
+    this.ORBIT_W = v;
+    for (const it of this.items) it.r += dv;
+    this.cfg.orbit = v; this.saveCfg(); this.layout();
   },
-  setNear(v) { this.cfg.near = v; this.saveCfg(); },
+  // 照片数量：槽位数变了要重建；滑条连续拖动时防抖，免得照片反复消失重载
+  setCount(v) {
+    v = Math.round(v);
+    if (v === this.cfg.count) return;
+    this.cfg.count = v; this.saveCfg();
+    clearTimeout(this.rebuildTimer);
+    this.rebuildTimer = setTimeout(() => this.buildPhotos(), 250);
+  },
   resetCfg() {
-    this.cfg.speed = this.DEF_SPEED;
-    this.cfg.planet = this.DEF_PLANET;
-    this.cfg.slots = this.DEF_SLOTS;
-    this.cfg.near = this.DEF_NEAR;
-    this.saveCfg();
-    SaturnSky.scale = this.cfg.planet;
-    this.buildSlots();
-  },
-  // 按 cfg.slots 增删照片槽位（init 与设置面板共用），照片总数不足时封顶
-  buildSlots() {
-    const want = Math.min(this.cfg.slots, PHOTOS.length);
-    while (this.items.length < want) this.items.push(this.makeItem());
-    while (this.items.length > want) this.items.pop().el.remove();
-  },
-  makeItem() {
-    const it = {
-      el: el("div", "galaxy-photo"),
-      img: el("img"),
-      photoIdx: this.nextPhoto % PHOTOS.length,
-      x: rand(-46, 46),          // vw
-      y: rand(-38, 38),          // vh
-      // 距相机的深度（中途增补时从当前机位前方、消失线之外生成）
-      z: this.cam + rand(Math.max(400, this.cfg.near + 100), this.DEPTH),
-      visible: false,
-      loaded: false,
-    };
-    this.nextPhoto++;
-    const p = PHOTOS[it.photoIdx];
-    it.el.style.visibility = "hidden";
-    it.img.alt = photoName(p);
-    it.img.decoding = "async";
-    // 图片加载完成后，按真实宽高比调整相框（横图横放、竖图竖放，不裁剪）
-    it.img.onload = () => {
-      const nw = it.img.naturalWidth, nh = it.img.naturalHeight;
-      if (!nw || !nh) return;
-      it.el.style.aspectRatio = nw + " / " + nh;
-      // 横图放宽宽度，不然长边被压得太小
-      if (nw > nh) it.el.style.width = "clamp(170px, 24vw, 320px)";
-    };
-    it.src = thumbSrc(p);
-    it.full = p.src;
-    it.el.appendChild(it.img);
-    it.el.addEventListener("click", (e) => {
-      if (e.button === 0) Lightbox.open(it.photoIdx);
-    });
-    this.space.appendChild(it.el);
-    this.place(it);
-    return it;
+    this.setSpeed(this.DEF_SPEED);
+    this.setPlanet(this.DEF_PLANET);
+    this.setSize(this.DEF_SIZE);
+    this.setOrbit(this.DEF_ORBIT);
+    this.setCount(this.DEF_COUNT); // 数量变了会经 setCount 触发重建
   },
 
   /* ----- 背景：星幕 canvas -----
-   * 星星分布在隧道圆柱空间里，每帧按相机深度做透视投影，
-   * 飞过身后的回收送到尽头，带闪烁与少量十字星芒。 */
+   * 星星固定在世界空间的球壳上（半径 600–1100，与 WebGL 星幕 800–1200 交错），
+   * 每帧用与照片、土星同一台的相机做投影，视差天然一致；带闪烁与少量星芒。 */
   initStarfield() {
     const cv = el("canvas");
     cv.id = "galaxyStars";
@@ -1205,7 +1702,6 @@ const Galaxy = {
     this.starCv = cv;
     this.starCtx = cv.getContext("2d");
     this.stars = [];
-    addEventListener("resize", () => this.resizeStars());
   },
   /* 画布尺寸只能在星河漫游显示出来之后量：页面藏着时 clientWidth 是 0，
    * 那样建出来的画布是 0×0，背景会整个消失。所以每次进入都重新量一次。 */
@@ -1219,47 +1715,45 @@ const Galaxy = {
     cv.height = h;
     const STAR_COLORS = ["#ffffff", "#ffffff", "#ffffff", "#aedcff", "#ffc6de", "#d9ccff"];
     const N = w < 768 ? 150 : 320;
-    this.stars = Array.from({ length: N }, () => ({
-      dx: rand(-1, 1) * w * 0.85,  // 单位深度处的方向偏移（px）
-      dy: rand(-1, 1) * h * 0.85,
-      z: rand(80, this.DEPTH),
-      r: rand(0.5, 1.7),
-      tw: rand(0.6, 2.2),          // 闪烁频率
-      ph: rand(0, Math.PI * 2),    // 闪烁相位
-      c: STAR_COLORS[(Math.random() * STAR_COLORS.length) | 0],
-      bright: Math.random() < 0.08, // 少量亮星画星芒
-    }));
+    this.stars = Array.from({ length: N }, () => {
+      const th = rand(0, Math.PI * 2);
+      const ph = Math.acos(rand(-1, 1));
+      const r = rand(600, 1100);
+      return {
+        x: r * Math.sin(ph) * Math.cos(th),
+        y: r * Math.cos(ph),
+        z: r * Math.sin(ph) * Math.sin(th),
+        r: rand(0.5, 1.7),
+        tw: rand(0.6, 2.2),          // 闪烁频率
+        ph: rand(0, Math.PI * 2),    // 闪烁相位
+        c: STAR_COLORS[(Math.random() * STAR_COLORS.length) | 0],
+        bright: Math.random() < 0.08, // 少量亮星画星芒
+      };
+    });
   },
-  drawStars() {
+  drawStars(view, P, W, H) {
     const g = this.starCtx;
     if (!g) return;
-    const cv = this.starCv;
-    const W = cv.width, H = cv.height;
-    const cx = W / 2, cy = H / 2, P = this.PERSPECTIVE;
     const t = performance.now() / 1000;
-    // 拖拽环顾时星幕也跟着视差。方向与照片层一致（跟手）：
-    // lookX 向右看 → 星幕左移；lookY 向下看 → 星幕下移，
-    // 所以 oy 取负（rotateX 的正角把照片往下带，与 tan 的符号相反）。
-    const ox = Math.tan((this.lookX * Math.PI) / 180) * P;
-    const oy = -Math.tan((this.lookY * Math.PI) / 180) * P;
+    const cx = W / 2, cy = H / 2;
     g.clearRect(0, 0, W, H);
     for (const s of this.stars) {
-      let rel = s.z - this.cam;
-      if (rel < 60) { s.z += this.DEPTH; rel = s.z - this.cam; }
-      const sc = P / rel;
-      const x = cx + (s.dx - ox) * sc;
-      const y = cy + (s.dy - oy) * sc;
+      const vx = view[0] * s.x + view[4] * s.y + view[8] * s.z + view[12];
+      const vy = view[1] * s.x + view[5] * s.y + view[9] * s.z + view[13];
+      const vz = view[2] * s.x + view[6] * s.y + view[10] * s.z + view[14];
+      if (vz > -20) continue; // 相机背后
+      const inv = P / -vz;
+      const x = cx + vx * inv, y = cy - vy * inv;
       if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
-      const a = (0.38 + 0.62 * Math.abs(Math.sin(t * s.tw + s.ph))) * Math.min(1, sc * 1.4);
-      const r = Math.min(3, s.r * sc);
+      const a = 0.38 + 0.62 * Math.abs(Math.sin(t * s.tw + s.ph));
       g.globalAlpha = a;
       g.fillStyle = s.c;
       g.beginPath();
-      g.arc(x, y, r, 0, 6.2832);
+      g.arc(x, y, s.r, 0, 6.2832);
       g.fill();
-      if (s.bright && sc > 0.35) {
+      if (s.bright) {
         // 亮星的十字星芒
-        const L = r * 4;
+        const L = s.r * 4;
         g.globalAlpha = a * 0.55;
         g.fillRect(x - L, y - 0.5, L * 2, 1);
         g.fillRect(x - 0.5, y - L, 1, L * 2);
@@ -1294,8 +1788,9 @@ const Galaxy = {
   },
 
   enter() {
-    // 背景两层都要等页面真正显示出来才量得到尺寸，所以放在这里初始化 / 重量
-    this.resizeStars();
+    // 相机几何（perspective / 环半径 / 星幕）要等页面真正显示出来才量得到
+    // 尺寸，所以放在这里重排；土星那层同理，首次进入时才初始化
+    this.layout();
     if (!this.skyTried) {
       this.skyTried = true;
       SaturnSky.init(this.stage);
@@ -1303,37 +1798,46 @@ const Galaxy = {
       SaturnSky.resize();
     }
     this.running = true;
+    // 首次进场：从远景缓动飞入默认机位；之后再进入保持上次视角
+    if (!this.enteredOnce) {
+      this.enteredOnce = true;
+      if (!this.reduceMotion && this.items.length) {
+        this.elev = 0.7;
+        this.zoom = 2.6;
+        this.flyTo({ elev: this.ELEV_DEF, zoom: this.ZOOM_DEF }, 1.8);
+      }
+    }
   },
-  leave() { this.running = false; },
+  leave() {
+    this.running = false;
+    this.setHovered(null);
+  },
 };
 
-/* ---------- 幻灯片 ---------- */
+/* ---------- 幻灯片 ----------
+ * 照片多了圆点放不下，位置提示用两样东西替代：
+ * 顶部 2px 进度发丝（CSS 动画，时长 = DUR，与自动播放严格同周期，暂停即冻结）
+ * + 右下角 Cormorant 斜体计数器（03 / 151）。 */
 const Slideshow = {
   idx: 0,
   timer: null,
   front: null,
   playing: true,
+  DUR: 5000, // 每张停留时长（ms），进度条动画时长在 init 里设成同一个值
   init() {
     this.a = $("#slideA");
     this.b = $("#slideB");
     this.front = this.a;
-    const dots = $("#slideDots");
-    // 照片太多时点指示器会溢出，直接隐藏
-    if (PHOTOS.length <= 40) {
-      PHOTOS.forEach((_, i) => {
-        const d = el("span", "slide-dot");
-        d.addEventListener("click", () => this.go(i));
-        dots.appendChild(d);
-      });
-    } else {
-      dots.style.display = "none";
-    }
+    this.bar = $("#slideBar");
+    this.bar.style.animationDuration = this.DUR + "ms";
     $("#slidePrev").addEventListener("click", () => this.go(this.idx - 1));
     $("#slideNext").addEventListener("click", () => this.go(this.idx + 1));
     $("#slidePlay").addEventListener("click", () => {
       this.playing = !this.playing;
       $("#slidePlay").textContent = this.playing ? "⏸" : "▶";
+      this.bar.style.animationPlayState = this.playing ? "running" : "paused";
       if (this.playing) this.auto();
+      else if (this.timer) clearTimeout(this.timer); // 暂停要真的停，连已排程的那张也取消
     });
     // 触屏左右滑动切换
     let touchX = null;
@@ -1361,20 +1865,33 @@ const Slideshow = {
     const p = PHOTOS[this.idx];
     const back = this.front === this.a ? this.b : this.a;
     back.style.backgroundImage = `url("${p.src}")`;
+    // 进页面的第一张直接呈现，不做 2.2s 淡入（不然先得盯几秒纯色背景）
+    if (instant) back.style.transition = "none";
     back.classList.remove("show");
     void back.offsetWidth; // 重启动画
     back.classList.add("show");
+    if (instant) requestAnimationFrame(() => { back.style.transition = ""; });
     this.front.classList.remove("show");
     this.front = back;
     const name = photoName(p);
-    $("#slideCaption").textContent = name;
-    $("#slideCaption").style.display = name ? "" : "none";
-    document.querySelectorAll(".slide-dot").forEach((d, j) => d.classList.toggle("active", j === this.idx));
+    const cap = $("#slideCaption");
+    $("#slideCapTitle").textContent = name;
+    const d = $("#slideCapDate");
+    d.textContent = p.date || "";
+    d.style.display = p.date ? "" : "none";
+    cap.style.display = name ? "" : "none";
+    $("#slideCounter").textContent =
+      String(this.idx + 1).padStart(2, "0") + " / " + PHOTOS.length;
+    // 进度条与自动播放同周期：每张重启一次，暂停时冻结
+    this.bar.classList.remove("run");
+    void this.bar.offsetWidth;
+    if (this.playing) this.bar.classList.add("run");
+    this.bar.style.animationPlayState = this.playing ? "running" : "paused";
     if (this.playing) this.auto();
   },
   auto() {
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.go(this.idx + 1), 5000);
+    this.timer = setTimeout(() => this.go(this.idx + 1), this.DUR);
   },
 };
 
@@ -1431,6 +1948,7 @@ function buildTimeline() {
 const Lightbox = {
   idx: 0,
   resumeGalaxy: false,
+  homePolaroid: false,
   init() {
     $("#lbClose").addEventListener("click", () => this.close());
     $("#lbPrev").addEventListener("click", () => this.step(-1));
@@ -1445,13 +1963,14 @@ const Lightbox = {
       if (e.key === "ArrowRight") this.step(1);
     });
   },
-  open(i) {
+  open(i, opts) {
     const box = $("#lightbox");
     // 星河的照片层是持续变化的 3D 合成层；隔着 backdrop-filter 继续推进和
     // 回收槽位会产生明显闪烁。首次打开时暂停，翻页不重复改写恢复状态。
     if (!box.classList.contains("open")) {
       this.resumeGalaxy = document.body.dataset.mode === "galaxy" && Galaxy.running;
       if (this.resumeGalaxy) Galaxy.running = false;
+      this.homePolaroid = !!(opts && opts.homePolaroid);
     }
     this.idx = i;
     this.render();
@@ -1459,8 +1978,12 @@ const Lightbox = {
   },
   close() {
     $("#lightbox").classList.remove("open");
+    if (this.homePolaroid && HOME_POLAROID.render && PHOTOS.length) {
+      HOME_POLAROID.render(this.idx);
+    }
     if (this.resumeGalaxy && document.body.dataset.mode === "galaxy") Galaxy.running = true;
     this.resumeGalaxy = false;
+    this.homePolaroid = false;
   },
   step(d) { this.open((this.idx + d + PHOTOS.length) % PHOTOS.length); },
   render() {
@@ -1536,8 +2059,8 @@ function initMusic() {
  * ⚙ 按钮在每个子页面下打开不同的设置面板：面板定义在 defs 里，想给别的
  * 子页面加设置再登记一项即可；没有登记的子页面会直接隐藏 ⚙ 按钮。
  * 目前有两页：
- *   3D 相册（ring）：旋转速度 + 图片大小；
- *   星河漫游（galaxy）：照片移动速度 + 行星大小 + 单次照片数量 + 照片消失距离。
+ *   3D 相册（ring）：旋转速度 + 图片大小 + 镜头远近；
+ *   星河漫游（galaxy）：星环自转速度 + 行星大小 + 照片大小。
  * 每次拖动即时生效并存 localStorage，可一键恢复默认值。 */
 const ModeSettings = {
   defs: {
@@ -1559,6 +2082,13 @@ const ModeSettings = {
           set: (v) => Ring.setSize(v),
           fmt: (v) => v.toFixed(2) + "×",
         },
+        {
+          label: "镜头远近",
+          min: Ring.ZOOM_MIN, max: Ring.ZOOM_MAX, step: 0.05,
+          get: () => Ring.cfg.zoom,
+          set: (v) => Ring.setZoom(v),
+          fmt: (v) => v.toFixed(2) + "×",
+        },
       ],
       reset: () => Ring.resetCfg(),
     },
@@ -1566,8 +2096,8 @@ const ModeSettings = {
       title: "🌌 星河漫游设置",
       rows: [
         {
-          label: "照片移动速度",
-          min: Galaxy.SPEED_MIN, max: Galaxy.SPEED_MAX, step: 0.1,
+          label: "星环自转速度",
+          min: 0, max: Galaxy.SPEED_MAX, step: 0.002,
           get: () => Galaxy.cfg.speed,
           set: (v) => Galaxy.setSpeed(v),
           fmt: (v) => Math.round((v / Galaxy.DEF_SPEED) * 100) + "%",
@@ -1580,18 +2110,25 @@ const ModeSettings = {
           fmt: (v) => v.toFixed(2) + "×",
         },
         {
-          label: "单次照片数量",
-          min: Galaxy.MIN_SLOTS, max: Galaxy.MAX_SLOTS, step: 1,
-          get: () => Galaxy.cfg.slots,
-          set: (v) => Galaxy.setSlots(v),
-          fmt: (v) => v + " 张",
+          label: "照片大小",
+          min: Galaxy.SIZE_MIN, max: Galaxy.SIZE_MAX, step: 0.05,
+          get: () => Galaxy.cfg.size,
+          set: (v) => Galaxy.setSize(v),
+          fmt: (v) => v.toFixed(2) + "×",
         },
         {
-          label: "照片消失距离",
-          min: Galaxy.MIN_NEAR, max: Galaxy.MAX_NEAR, step: 50,
-          get: () => Galaxy.cfg.near,
-          set: (v) => Galaxy.setNear(v),
-          fmt: (v) => "距镜头 " + Math.round(v) + " px",
+          label: "照片数量",
+          min: Galaxy.COUNT_MIN, max: Galaxy.COUNT_MAX, step: 1,
+          get: () => Galaxy.cfg.count,
+          set: (v) => Galaxy.setCount(v),
+          fmt: (v) => Math.round(v) + " 张",
+        },
+        {
+          label: "环绕半径",
+          min: Galaxy.ORBIT_MIN, max: Galaxy.ORBIT_MAX, step: 1,
+          get: () => Galaxy.cfg.orbit,
+          set: (v) => Galaxy.setOrbit(v),
+          fmt: (v) => Math.round((v / Galaxy.ORBIT_REF) * 100) + "%",
         },
       ],
       reset: () => Galaxy.resetCfg(),
