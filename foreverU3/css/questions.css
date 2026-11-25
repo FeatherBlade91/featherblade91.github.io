@@ -1,0 +1,51 @@
+/* Folded notes: blue ink, rose seal, and a quiet paper surface. */
+.question-launch{font:12px var(--font-serif);color:#685d8c;padding:5px 10px;margin:0 0 5px -7px;border-radius:8px;background:#eee8f680}
+.question-launch:hover{background:#e3dcf1}
+.question-editor{position:absolute;inset:0;z-index:4;background:#f5f6fc;overflow-y:auto;overscroll-behavior:contain;padding:23px 24px}
+.question-editor-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
+.question-editor h3{font:500 23px/1.5 var(--font-serif);margin:7px 0 0;color:#454e70}
+.question-eyebrow{font:10px/1.6 var(--font-main);letter-spacing:1.6px;color:#88758e}
+.question-types{display:flex;border:0;border-radius:12px;padding:4px;background:#e9eaf3;margin:0 0 22px;gap:4px}
+.question-types label{flex:1;text-align:center;position:relative;cursor:pointer}
+.question-types input{position:absolute;opacity:0}
+.question-types span{display:block;padding:10px;border-radius:9px;font-size:13px;color:#727b96}
+.question-types input:checked+span{background:#fff;color:#4d587c;box-shadow:0 2px 7px #5b638514}
+.question-label{display:block;font-size:12px;color:#505c7a;margin:0 0 19px}
+.question-label small,.question-options-editor small{font-size:10px;color:#7c859b;margin-left:6px;font-weight:400}
+.question-form textarea,.question-form select,.question-option-field input,.question-answer{display:block;width:100%;border:1px solid #dce0ed;background:#ffffffc9;border-radius:11px;padding:11px 12px;color:#424e70;font:13px/1.7 var(--font-main);margin-top:8px;resize:vertical;min-width:0}
+.question-form textarea::placeholder,.question-option-field input::placeholder,.question-answer::placeholder{color:#8d94a8}
+.question-options-editor{padding:0;border:0;margin:0 0 19px;min-width:0}
+.question-options-editor legend{font-size:12px;color:#505c7a}
+.question-option-field{display:flex;align-items:center;gap:10px;margin-top:8px}
+.question-option-field>span{font:italic 21px var(--font-display);color:#9181a8}
+.question-option-field input{margin:0;flex:1}
+.question-option-field button{padding:9px;color:#8b7790;font-size:18px}
+.question-option-field button:disabled,.question-add:disabled{opacity:.3;cursor:default}
+.question-add{font-size:11px;color:#685d8c;padding:10px 0 0}
+.question-editor-note,.question-footnote{font:11px/1.8 var(--font-main);color:#81859b;margin:14px 0 0}
+.question-card{width:100%;max-width:340px;position:relative;padding:23px 20px 19px;border:1px solid #e1dfed;border-radius:5px 20px 20px;background:linear-gradient(135deg,#fffdfd,#f9f9ff);box-shadow:0 8px 26px #6473920b;overflow-wrap:anywhere;user-select:text}
+.mine .question-card{border-radius:20px 5px 20px 20px}
+.question-card:before{content:'';display:block;position:absolute;left:20px;top:0;width:36px;height:3px;background:#c6b4d9;border-radius:0 0 4px 4px}
+.question-title{font:500 19px/1.75 var(--font-serif);color:#424c6b;margin:12px 0 19px;white-space:pre-wrap}
+.question-choices{border:0;padding:0;margin:0;min-width:0}
+.question-option{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid #e2e4ef;border-radius:11px;margin:8px 0;background:#fff9;font:12px/1.7 var(--font-main);color:#626e89;cursor:pointer;transition:background .18s,border-color .18s}
+.question-option b{font:italic 20px var(--font-display);color:#9882a9}
+.question-option input{accent-color:#9777ad;flex-shrink:0}
+.question-option:has(input:checked){background:#efe8f7;border-color:#bba6d0;color:#57426c}
+.question-option.static{cursor:default}
+.question-submit{width:100%;padding:12px;margin-top:14px;border-radius:11px;background:#e9e2f1;color:#665078;font:12px var(--font-serif)}
+.question-submit:hover{background:#dfd4eb}
+.question-submit:disabled{opacity:.5;cursor:wait}
+.question-result{border-left:2px solid #c4d5eb;padding:0 0 0 12px;margin-bottom:18px}
+.question-caption{font:10px var(--font-main);letter-spacing:1px;color:#887e98}
+.question-result p,.question-reveal p,.question-own-reply p{font:13px/1.9 var(--font-main);white-space:pre-wrap;margin:8px 0 0}
+.question-reveal{position:relative;background:#f8edf3;border:1px solid #eedde7;border-radius:3px 12px 12px;padding:17px 15px;animation:question-unfold .4s ease-out}
+.question-reveal:after{content:'♡';position:absolute;right:13px;top:10px;color:#be8ca7;font-size:20px}
+.question-reveal .question-verdict{font-size:11px;color:#95647e}
+.question-own-reply{font:11px/1.8 var(--font-main);color:#85708c;margin-top:12px}
+.question-own-reply summary{cursor:pointer}
+.question-card :focus-visible,.question-editor :focus-visible,.question-launch:focus-visible{outline:2px solid #9d80b5;outline-offset:3px}
+.question-types input:focus-visible+span{outline:2px solid #9d80b5;outline-offset:2px}
+@keyframes question-unfold{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:600px){.question-editor{padding:20px}.question-form textarea,.question-form select,.question-option-field input,.question-answer{font-size:16px}.question-card{padding:20px 17px;max-width:100%}.question-title{font-size:18px}}
+@media(prefers-reduced-motion:reduce){.question-reveal{animation:none}.question-option{transition:none}}

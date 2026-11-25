@@ -19,7 +19,7 @@ const photoName = (p) =>
   (p.caption || "").trim() ||
   decodeURIComponent(p.src.split("/").pop() || "").replace(/\.[^.]+$/, "");
 // 列表场景用 thumbs/ 小图（由 tools/make_thumbs.py 生成），加载失败回退原图
-const thumbSrc = (p) => p.src.replace(/^photos\//, "thumbs/");
+const thumbSrc = (p) => p.thumb || p.src.replace(/^photos\//, "thumbs/");
 function setThumb(img, p) {
   img.decoding = "async";
   img.onerror = () => { img.onerror = null; img.src = p.src; };
@@ -188,10 +188,10 @@ function initHome() {
 
   const grid = $("#loveTimer");
   const switchBtn = $("#timerSwitch");
-  let mode = localStorage.getItem("timerMode") || "days"; // days | calendar
+  let mode = localStorage.getItem("timerMode") || "days"; // 见 MODES
   let numEls = [];
 
-  // 日历差值：几年 + 几个月 + 几周 + 几天（都在平移后的北京坐标系里算）
+  // 日历差值：几年 + 几月 + 几周 + 几天（都在平移后的北京坐标系里算）
   function calendarParts(nowB) {
     let y = nowB.getUTCFullYear() - sy;
     let m = nowB.getUTCMonth() - (sm - 1);
@@ -206,10 +206,19 @@ function initHome() {
     return { y, m, w, d: d % 7 };
   }
 
+  const MODES = {
+    days: { name: "总天数", units: ["天", "时", "分", "秒"] },
+    calendar: { name: "几年几月几周几天", units: ["年", "月", "周", "天", "时", "分", "秒"] },
+    monthDays: { name: "几月几天", units: ["月", "天"] },
+    dayCount: { name: "天数", units: ["天"] },
+    ymd: { name: "几年几月几天", units: ["年", "月", "天"] },
+  };
+  const ORDER = Object.keys(MODES);
+  if (!MODES[mode]) mode = "days";
+  const nextMode = () => ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length];
+
   function buildCells() {
-    const units = mode === "days"
-      ? ["天", "时", "分", "秒"]
-      : ["年", "个月", "周", "天", "时", "分", "秒"];
+    const units = MODES[mode].units;
     grid.classList.toggle("compact", units.length > 4);
     grid.innerHTML = "";
     numEls = units.map((u) => {
@@ -222,17 +231,21 @@ function initHome() {
       grid.appendChild(cell);
       return num;
     });
-    switchBtn.textContent = mode === "days" ? "⇄ 换成 几年几月几周几天" : "⇄ 换成 总天数";
+    switchBtn.textContent = "⇄ 换成 " + MODES[nextMode()].name;
   }
 
   function currentVals() {
     const nowB = beijingNow();
     let diff = Math.max(0, nowB.getTime() - startUtc);
+    const days = Math.floor(diff / 86400000);
     const h = Math.floor((diff % 86400000) / 3600000);
     const mi = Math.floor((diff % 3600000) / 60000);
     const s = Math.floor((diff % 60000) / 1000);
-    if (mode === "days") return [Math.floor(diff / 86400000), h, mi, s];
+    if (mode === "days") return [days, h, mi, s];
+    if (mode === "dayCount") return [days];
     const c = calendarParts(nowB);
+    if (mode === "monthDays") return [c.y * 12 + c.m, c.w * 7 + c.d];
+    if (mode === "ymd") return [c.y, c.m, c.w * 7 + c.d];
     return [c.y, c.m, c.w, c.d, h, mi, s];
   }
 
@@ -264,7 +277,7 @@ function initHome() {
   }
 
   switchBtn.addEventListener("click", () => {
-    mode = mode === "days" ? "calendar" : "days";
+    mode = nextMode();
     localStorage.setItem("timerMode", mode);
     buildCells();
     countUp(currentVals());
@@ -2213,4 +2226,32 @@ const ModeSettings = {
   // buildTimeline(); // 时间轴暂时下线：照片时间尚未标注
   // 支持 #ring / #galaxy / #slideshow 直达
   if (location.hash) switchMode(location.hash.slice(1));
+  window.ForeverAlbum = {
+    async mergeUploads(temporary) {
+      const old = PHOTOS;
+      let permanent = old.filter(p => !p.temporary);
+      try {
+        const response = await fetch('photos.json?ts=' + Date.now(), {cache:'no-store'});
+        if (response.ok) permanent = (await response.json()).photos || permanent;
+      } catch (_) { /* Keep the last known permanent album when offline. */ }
+      const key = p => p.uploadId || p.src;
+      const available = new Map(temporary.map(p => [key(p),p]));
+      permanent.forEach(p => available.set(key(p),p));
+      const next = [];
+      old.forEach(p => { if(available.has(key(p))) { next.push(available.get(key(p))); available.delete(key(p)); } });
+      next.push(...available.values());
+      if(JSON.stringify(next) === JSON.stringify(old)) return;
+      if (document.querySelector('#lightbox').classList.contains('open')) Lightbox.close();
+      PHOTOS = next;
+      if (PHOTOS.length) { Ring.build(); Galaxy.buildPhotos(); }
+      else { Ring.ring.replaceChildren(); Ring.slots=[]; Galaxy.space.replaceChildren(); Galaxy.items=[]; }
+      if (HOME_POLAROID.render && PHOTOS.length) HOME_POLAROID.render(Math.min(Math.max(HOME_POLAROID.idx,0),PHOTOS.length-1));
+      if (document.body.dataset.mode === 'slideshow') {
+        if(PHOTOS.length) Slideshow.go(Math.min(Slideshow.idx,PHOTOS.length-1),true);
+        else { Slideshow.leave(); Slideshow.a.style.backgroundImage=''; Slideshow.b.style.backgroundImage=''; }
+      }
+    },
+    openUpload(id) { const i = PHOTOS.findIndex(p => p.uploadId === id); if(i >= 0) Lightbox.open(i); }
+  };
+  window.dispatchEvent(new Event('forever-album-ready'));
 })();

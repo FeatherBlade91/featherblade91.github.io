@@ -8,7 +8,8 @@
   <link rel="preload" href="fonts/cormorantgaramond-600i-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="css/fonts.css" />
   <link rel="stylesheet" href="css/style.css?v=20260825" />
-  <link rel="stylesheet" href="css/chat.css?v=20260925" />
+  <link rel="stylesheet" href="css/chat.css?v=20261125" />
+  <link rel="stylesheet" href="css/questions.css?v=20260925" />
 </head>
 <body>
 
@@ -106,7 +107,6 @@
       </div>
       <!-- 悄悄话入口故意做得不起眼：左下角一个淡淡的小信封 -->
       <button id="openLetter" class="secret-letter" title="" aria-label="悄悄话">💌</button>
-      <div class="scroll-hint">✦ 点击导航，换个姿势看照片 ✦</div>
     </section>
 
     <!-- ===== 3D 旋转相册 ===== -->
@@ -193,48 +193,48 @@
   <!-- 二人对话：不离开相册，也能说说今天。 -->
   <button class="chat-launch" id="chatToggle" type="button" aria-label="打开二人对话" aria-haspopup="dialog" aria-controls="chatDialog" aria-expanded="false">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-4 3v-10A7.5 7.5 0 0 1 9.5 4h3A7.5 7.5 0 0 1 20 11.5Z"/><path d="M7 10h8M7 14h5"/></svg>
-    <span>聊一会儿</span><span class="chat-badge" id="chatBadge" hidden></span>
+    <span class="chat-badge" id="chatBadge" hidden></span>
   </button>
   <dialog class="chat-dialog" id="chatDialog" aria-labelledby="chatTitle">
     <div class="chat-shell">
       <header class="chat-header">
-        <div class="chat-pair" aria-hidden="true"><span>L</span><span>D</span></div>
-        <div class="chat-heading"><p class="chat-eyebrow">JUST BETWEEN US</p><h2 id="chatTitle">二人对话</h2></div>
-        <button class="chat-icon" id="chatClose" type="button" aria-label="收起对话">✕</button>
+        <h2 id="chatTitle">对话</h2>
+        <span class="chat-status" id="chatStatus" role="status"></span>
+        <button class="chat-text-btn" id="chatLogout" type="button" hidden>退出</button>
+        <button class="chat-icon" id="chatClose" type="button" aria-label="关闭">✕</button>
       </header>
-      <div class="chat-statusbar"><span class="chat-status" id="chatStatus" role="status">只属于我们的聊天角落</span><button class="chat-text-btn" id="chatLogout" type="button" hidden>退出</button></div>
       <form class="chat-login" id="chatLogin">
-        <div class="chat-orbit" aria-hidden="true"><span class="chat-orbit-a">L</span><span class="chat-orbit-b">D</span><i>✦</i></div>
-        <p class="chat-welcome">此刻，想和你说。</p>
-        <p class="chat-intro">那些小小的日常，都可以留在这里。</p>
-        <fieldset class="chat-identities"><legend>今天是谁来啦</legend><label><input type="radio" name="identity" value="LYK" checked/><span>LYK <small>蓝色星光</small></span></label><label><input type="radio" name="identity" value="DMY"/><span>DMY <small>粉色星光</small></span></label></fieldset>
-        <label class="chat-password-label" for="chatPassword">对话密码</label>
-        <input id="chatPassword" class="chat-password" type="password" autocomplete="current-password" placeholder="输入你的专属密码" required minlength="8" maxlength="128" />
+        <fieldset class="chat-identities"><legend class="chat-sr-only">身份</legend><label><input type="radio" name="identity" value="LYK" checked/><span>LYK</span></label><label><input type="radio" name="identity" value="DMY"/><span>DMY</span></label></fieldset>
+        <label class="chat-sr-only" for="chatPassword">密码</label>
+        <input id="chatPassword" class="chat-password" type="password" autocomplete="current-password" placeholder="密码" required minlength="8" maxlength="128" />
         <p class="chat-error" id="chatLoginError" role="alert"></p>
-        <button class="chat-primary" id="chatLoginButton" type="submit">进入我们的对话 <span aria-hidden="true">↗</span></button>
-        <p class="chat-login-foot">仅限两位成员 · 登录后同步历史消息</p>
+        <button class="chat-primary" id="chatLoginButton" type="submit">登录</button>
       </form>
       <section class="chat-conversation" id="chatConversation" aria-label="聊天内容" hidden>
         <div class="chat-scroll" id="chatScroll" tabindex="0" aria-label="消息记录">
-          <button class="chat-history chat-text-btn" id="chatHistory" type="button" hidden>查看更早的消息</button>
-          <div class="chat-empty" id="chatEmpty"><span aria-hidden="true">✧</span><p>从一句「在吗」开始</p><small>你说的话，会在这里好好保存。</small></div>
+          <button class="chat-history chat-text-btn" id="chatHistory" type="button" hidden>更早的消息</button>
+          <div class="chat-empty" id="chatEmpty"></div>
           <div id="chatMessages" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions"></div>
         </div>
-        <button class="chat-new chat-text-btn" id="chatNew" type="button" hidden>有新消息 ↓</button>
+        <button class="chat-new chat-text-btn" id="chatNew" type="button" hidden>新消息 ↓</button>
         <p class="chat-error chat-sync-error" id="chatSyncError" role="alert"></p>
         <form class="chat-compose" id="chatCompose">
           <label class="chat-sr-only" for="chatInput">输入消息</label>
-          <textarea id="chatInput" rows="2" maxlength="2000" placeholder="和你分享一件小事…" enterkeyhint="enter"></textarea>
-          <div class="chat-compose-footer"><span id="chatCounter">Enter 发送 · Shift + Enter 换行</span><button class="chat-send" id="chatSend" type="submit" disabled>发送 <span aria-hidden="true">↑</span></button></div>
+          <textarea id="chatInput" rows="1" maxlength="2000" enterkeyhint="enter"></textarea>
+          <span class="chat-counter" id="chatCounter"></span>
+          <button class="chat-send" id="chatSend" type="submit" disabled>发送</button>
         </form>
       </section>
     </div>
   </dialog>
   <script src="js/config.js"></script>
   <script src="js/music.js?v=20260825"></script>
-  <script src="js/main.js?v=20260826"></script>
+  <script src="js/main.js?v=20261125"></script>
   <script defer src="js/vendor/supabase-2.117.1.js"></script>
   <script defer src="js/chat-config.js?v=20260925"></script>
-  <script defer src="js/chat.js?v=20260925"></script>
+  <script defer src="js/questions.js?v=20260925"></script>
+  <script defer src="js/chat.js?v=20261125"></script>
+  <link rel="stylesheet" href="css/upload.css?v=20260925" />
+  <script defer src="js/upload.js?v=20260925"></script>
 </body>
 </html>

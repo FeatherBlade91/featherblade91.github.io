@@ -13,6 +13,15 @@
   const pageSize = 60;
   const columns = 'seq,id,sender_id,body,created_at';
   const mobile = matchMedia('(pointer: coarse)').matches;
+  const questions = window.ForeverQuestions?.mount({
+    host: ui.Conversation, compose: ui.Compose,
+    context: () => ({userId:user?.id, ready:!!user && ready}),
+    send: body => {
+      if (!user || !ready || body.length > 2000) return false;
+      send({id:crypto.randomUUID(),sender_id:user.id,body,created_at:new Date().toISOString(),delivery:'queued'});
+      return true;
+    }
+  });
 
   function status(text, state = '') {
     ui.Status.textContent = text;
@@ -29,7 +38,7 @@
   function updateComposer() {
     ui.Send.disabled = !user || !ready || !ui.Input.value.trim() || ui.Input.value.length > 2000;
     const n = ui.Input.value.length;
-    ui.Counter.textContent = n > 1600 ? `${n} / 2000` : mobile ? '写好后，轻点发送' : 'Enter 发送 · Shift + Enter 换行';
+    ui.Counter.textContent = n > 1600 ? `${n} / 2000` : '';
   }
   function pendingKey() { return 'foreveru-chat-pending:' + user.id; }
   function savePending() {
@@ -55,6 +64,9 @@
     return e;
   }
   function render(forceBottom = false) {
+    const focused = document.activeElement;
+    const focusedId = focused?.closest('.chat-message')?.dataset.messageId;
+    const selection = focused?.tagName === 'TEXTAREA' ? [focused.selectionStart,focused.selectionEnd] : null;
     const stick = forceBottom || atBottom();
     const sorted = [...rows.values()].sort((a,b) => {
       if (a.seq && b.seq) return a.seq - b.seq;
@@ -74,18 +86,24 @@
       const name = mine ? member?.name : member?.name === 'LYK' ? 'DMY' : 'LYK';
       const meta = node('div','chat-message-meta');
       meta.append(node('span','',name || '我'), node('time','',date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})));
-      article.append(meta,node('div','chat-bubble',row.body));
+      article.append(meta,questions?.render(row,rows) || node('div','chat-bubble',row.body));
       if (mine) {
         if (row.delivery === 'failed') {
-          const retry = node('button','chat-retry','未发送 · 点此重试');
+          const retry = node('button','chat-retry','发送失败，重试');
           retry.type = 'button';
           retry.addEventListener('click', () => send(row));
           article.append(retry);
-        } else article.append(node('span','chat-delivery',row.seq ? '已发送' : '发送中…'));
+        } else if (!row.seq) article.append(node('span','chat-delivery','发送中'));
       }
       frag.append(article);
     }
     ui.Messages.replaceChildren(frag);
+    if (focusedId) {
+      const article = [...ui.Messages.querySelectorAll('.chat-message')].find(n=>n.dataset.messageId===focusedId);
+      const target = selection ? article?.querySelector('textarea') : article?.querySelector('input:checked');
+      target?.focus({preventScroll:true});
+      if (selection && target) target.setSelectionRange(...selection);
+    }
     ui.Empty.hidden = rows.size > 0 || !ready;
     if (stick) ui.Scroll.scrollTop = ui.Scroll.scrollHeight;
   }
@@ -112,9 +130,9 @@
   }
   function connectionStatus() {
     if (!user || !member) return;
-    if (!navigator.onLine) status('网络已断开 · 恢复后继续同步', 'offline');
-    else if (realtime) status(`${member.name} · 实时已连接`, 'connected');
-    else status('正在重连 · 消息会自动补收', 'offline');
+    if (!navigator.onLine) status('离线', 'offline');
+    else if (realtime) status('', 'connected');
+    else status('重连中', 'offline');
   }
   async function sync() {
     if (!user || !member) return;
@@ -155,7 +173,7 @@
     } catch (_) {
       if (current !== epoch) return;
       ui.SyncError.textContent = navigator.onLine ? '消息暂时没有同步成功，正在自动重试。' : '网络已断开，已写好的内容会保留。';
-      status('等待同步 · 稍后自动重试','offline');
+      status('同步中','offline');
     } finally {
       if (current === epoch) {
         syncing = false;
@@ -167,7 +185,7 @@
     if (paging || !ready) return;
     paging = true;
     ui.History.disabled = true;
-    ui.History.textContent = '正在翻阅…';
+    ui.History.textContent = '加载中';
     const current = epoch;
     const oldHeight = ui.Scroll.scrollHeight;
     const oldTop = ui.Scroll.scrollTop;
@@ -186,7 +204,7 @@
       if (current === epoch) {
         paging = false;
         ui.History.disabled = false;
-        ui.History.textContent = '查看更早的消息';
+        ui.History.textContent = '更早的消息';
       }
     }
   }
@@ -229,6 +247,7 @@
     user = session?.user || null;
     member = null;
     rows = new Map();
+    questions?.reset();
     ready = false; realtime = false; syncing = false; syncAgain = false; paging = false; watermark = 0;
     clearUnread();
     ui.Messages.replaceChildren();
@@ -238,8 +257,8 @@
     ui.Login.hidden = false;
     ui.Logout.hidden = true;
     updateComposer();
-    if (!user) { status('只属于我们的聊天角落'); return; }
-    status('正在打开我们的对话…');
+    if (!user) { status(''); return; }
+    status('');
     const {data,error} = await client.from('forever_chat_members').select('name').eq('user_id',user.id).maybeSingle();
     if (current !== epoch) return;
     if (error || !data) {
@@ -253,7 +272,7 @@
     ui.Conversation.hidden = false;
     ui.Conversation.dataset.identity = member.name;
     ui.Logout.hidden = false;
-    ui.Logout.textContent = '退出 ' + member.name;
+    ui.Logout.textContent = '退出';
     ui.Password.value = '';
     channel = client.channel('foreveru-chat-' + user.id)
       .on('postgres_changes',{event:'INSERT',schema:'public',table}, payload => {
@@ -315,7 +334,7 @@
       if (error) throw error;
       await sessionChanged(data.session);
     } catch (error) {
-      ui.LoginError.textContent = error.status === 400 ? '身份或密码不对，再检查一下吧。' : error.status === 429 ? '尝试次数有点多，请稍后再试。' : '暂时连接不上，请检查网络后重试。';
+      ui.LoginError.textContent = error.status === 400 ? '密码错误' : error.status === 429 ? '尝试过多，请稍后再试' : '网络错误';
     } finally { loading = false; ui.LoginButton.disabled = false; }
   });
   ui.Logout.addEventListener('click',async()=>{
@@ -335,7 +354,7 @@
   });
 
   if (!window.supabase || !config?.url || !config?.publishableKey) {
-    status('对话暂时无法连接','offline');
+    status('无法连接','offline');
     ui.LoginError.textContent = '聊天组件加载失败，请刷新页面重试。';
     ui.LoginButton.disabled = true;
     return;
@@ -344,7 +363,8 @@
   const boundedFetch = async (url,options = {}) => {
     const controller = new AbortController();
     const abort = () => controller.abort();
-    const timer = setTimeout(abort,15000);
+    // Photo transfer can take longer on mobile networks; chat/auth remain bounded at 15s.
+    const timer = setTimeout(abort,String(url).includes('/storage/v1/object') ? 120000 : 15000);
     if (options.signal?.aborted) abort();
     options.signal?.addEventListener('abort',abort,{once:true});
     try { return await fetch(url,{...options,signal:controller.signal}); }
@@ -354,9 +374,11 @@
     auth:{storageKey:'foreveru-chat-auth',persistSession:true,autoRefreshToken:true,detectSessionInUrl:false},
     global:{fetch:boundedFetch}
   });
+  // Share one auth client with photo uploads; never create competing refresh locks.
+  window.ForeverBackend = client;
   client.auth.onAuthStateChange((_event,session)=>{
     // Do not await another auth operation inside Supabase's auth-lock callback.
-    setTimeout(()=>sessionChanged(session).catch(()=>status('暂时无法连接，请刷新重试','offline')),0);
+    setTimeout(()=>sessionChanged(session).catch(()=>status('无法连接','offline')),0);
   });
   setInterval(()=>{if (user && !document.hidden) sync();},30000);
   updateComposer();
