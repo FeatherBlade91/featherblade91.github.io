@@ -6,8 +6,8 @@
   <title>LYK ♥ DMY · 我们的恋爱相册</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💗</text></svg>" />
   <link rel="preload" href="fonts/cormorantgaramond-600i-latin.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="css/fonts.css" />
-  <link rel="stylesheet" href="css/style.css?v=20261125" />
+  <link rel="stylesheet" href="css/fonts.css?v=20261125" />
+  <link rel="stylesheet" href="css/style.css?v=20261125w" />
   <link rel="stylesheet" href="css/chat.css?v=20261125" />
   <link rel="stylesheet" href="css/questions.css?v=20260925" />
 </head>
@@ -65,46 +65,61 @@
 
     <!-- ===== 首页 ===== -->
     <section class="mode-page active" id="page-home">
-      <div class="hero">
-        <div class="hero-badge">✦ Our Love Story ✦</div>
-        <h1 class="hero-names">
-          <span class="name name-him">LYK</span>
-          <span class="hero-heart" id="heroHeart">
-            <svg viewBox="0 0 100 92" width="1em" height="0.92em" aria-hidden="true">
-              <defs>
-                <linearGradient id="heartGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stop-color="#7fb8ec"/>
-                  <stop offset="0.5" stop-color="#b7a6e8"/>
-                  <stop offset="1" stop-color="#ffa6c6"/>
-                </linearGradient>
-              </defs>
-              <path fill="url(#heartGrad)" d="M50 84 C22 62 4 44 4 26 C4 11 15 3 27 3 C37 3 45 9 50 18 C55 9 63 3 73 3 C85 3 96 11 96 26 C96 44 78 62 50 84 Z"/>
-              <path class="ecg" pathLength="100" d="M13 40 H33 L39 28 L47 53 L53 33 L57 40 H87"/>
-              <ellipse cx="32" cy="22" rx="10" ry="6" fill="#ffffff" opacity="0.55" transform="rotate(-20 32 22)"/>
-            </svg>
-          </span>
-          <span class="name name-her">DMY</span>
-        </h1>
-        <p class="hero-subtitle" id="heroSubtitle"></p>
+      <!-- 封面：名字 + 计时卡居中，宽屏两侧钉几张随手翻到的拍立得（PhotoWall.buildCover） -->
+      <div class="home-cover">
+        <div class="cover-scatter" id="coverScatter"></div>
+        <div class="hero">
+          <div class="hero-badge">✦ Our Love Story ✦</div>
+          <h1 class="hero-names">
+            <span class="name name-him">LYK</span>
+            <span class="hero-heart" id="heroHeart">
+              <svg viewBox="0 0 100 92" width="1em" height="0.92em" aria-hidden="true">
+                <defs>
+                  <linearGradient id="heartGrad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#7fb8ec"/>
+                    <stop offset="0.5" stop-color="#b7a6e8"/>
+                    <stop offset="1" stop-color="#ffa6c6"/>
+                  </linearGradient>
+                </defs>
+                <path fill="url(#heartGrad)" d="M50 84 C22 62 4 44 4 26 C4 11 15 3 27 3 C37 3 45 9 50 18 C55 9 63 3 73 3 C85 3 96 11 96 26 C96 44 78 62 50 84 Z"/>
+                <path class="ecg" pathLength="100" d="M13 40 H33 L39 28 L47 53 L53 33 L57 40 H87"/>
+                <ellipse cx="32" cy="22" rx="10" ry="6" fill="#ffffff" opacity="0.55" transform="rotate(-20 32 22)"/>
+              </svg>
+            </span>
+            <span class="name name-her">DMY</span>
+          </h1>
+          <p class="hero-subtitle" id="heroSubtitle"></p>
 
-        <div class="timer-wrap">
-          <div class="timer-card glass">
-            <div class="timer-label">我们已经在一起</div>
-            <div class="timer-grid" id="loveTimer"></div>
-            <button class="timer-switch" id="timerSwitch" title="切换计时方式"></button>
+          <div class="timer-wrap">
+            <div class="timer-card glass">
+              <div class="timer-label">我们已经在一起</div>
+              <div class="timer-grid" id="loveTimer"></div>
+              <button class="timer-switch" id="timerSwitch" title="切换计时方式"></button>
+            </div>
           </div>
-          <!-- 拍立得：随机贴一张照片在计时卡角上，点开看大图 -->
-          <button class="hero-polaroid" id="heroPolaroid" type="button" hidden aria-label="看这张照片的大图">
-            <span class="polaroid-img"><img id="polaroidImg" alt="" /></span>
-            <span class="polaroid-cap" id="polaroidCap"></span>
+
+          <p class="hero-milestone" id="heroMilestone" hidden></p>
+
+        </div>
+        <button class="scroll-hint" id="toWall" type="button">往下翻，是我们的照片墙<span aria-hidden="true">↓</span></button>
+      </div>
+
+      <!-- 照片墙：按月份分组的拍立得，点照片看大图，点 ♡ 收进「心动」（逻辑在 PhotoWall） -->
+      <div class="wall" id="wall">
+        <header class="wall-head">
+          <div class="hero-badge">✦ Photo Wall ✦</div>
+          <h2 class="wall-title">我们的照片墙</h2>
+          <p class="wall-sub" id="wallSub"></p>
+        </header>
+        <div class="wall-tools">
+          <nav class="wall-months" id="wallMonths" aria-label="按月份跳转"></nav>
+          <button class="wall-loved" id="wallLoved" type="button" aria-pressed="false">
+            <svg viewBox="0 0 100 92" aria-hidden="true"><path d="M50 84 C22 62 4 44 4 26 C4 11 15 3 27 3 C37 3 45 9 50 18 C55 9 63 3 73 3 C85 3 96 11 96 26 C96 44 78 62 50 84 Z"/></svg>
+            只看心动 <span class="wall-loved-n" id="wallLovedN">0</span>
           </button>
         </div>
-
-        <p class="hero-milestone" id="heroMilestone" hidden></p>
-
-        <div class="hero-actions">
-          <button class="btn-ghost" data-goto="ring">开始逛相册 →</button>
-        </div>
+        <div id="wallBody"></div>
+        <p class="wall-empty" id="wallEmpty" hidden>还没有心动的照片。点照片右下角的 ♡，喜欢的那张就会留在这里。</p>
       </div>
       <!-- 悄悄话入口故意做得不起眼：左下角一个淡淡的小信封 -->
       <button id="openLetter" class="secret-letter" title="" aria-label="悄悄话">💌</button>
@@ -249,7 +264,7 @@
   </dialog>
   <script src="js/config.js"></script>
   <script src="js/music.js?v=20260825"></script>
-  <script src="js/main.js?v=20261125b"></script>
+  <script src="js/main.js?v=20261125w"></script>
   <script defer src="js/vendor/supabase-2.117.1.js"></script>
   <script defer src="js/chat-config.js?v=5244cf04"></script>
   <link rel="stylesheet" href="css/auth.css?v=20261125" />

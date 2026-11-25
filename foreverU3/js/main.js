@@ -4,7 +4,6 @@
  * ============================================================ */
 
 let PHOTOS = []; // { src, date, caption, milestone }
-const HOME_POLAROID = { idx: -1, render: null };
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -286,23 +285,6 @@ function initHome() {
   countUp(currentVals());
   setInterval(tick, 1000);
 
-  // 计时卡右上角贴的拍立得：随机一张照片，点开看大图（走全站统一的灯箱）
-  (function polaroid() {
-    const btn = $("#heroPolaroid");
-    if (!btn || !PHOTOS.length) return;
-    const img = $("#polaroidImg");
-    const render = (i) => {
-      HOME_POLAROID.idx = i;
-      img.alt = photoName(PHOTOS[i]);
-      setThumb(img, PHOTOS[i]);
-      $("#polaroidCap").textContent = photoName(PHOTOS[i]);
-    };
-    HOME_POLAROID.render = render;
-    render(Math.floor(Math.random() * PHOTOS.length));
-    btn.hidden = false;
-    btn.addEventListener("click", () => Lightbox.open(HOME_POLAROID.idx, { homePolaroid: true }));
-  })();
-
   // 下一个纪念日提醒：取 milestones 里离今天（北京时间）最近的一个
   (function nextMilestone() {
     const box = $("#heroMilestone");
@@ -332,6 +314,189 @@ function initHome() {
     box.hidden = false;
   })();
 }
+
+/* ---------- 首页：照片墙 ----------
+ * 按拍摄月份分组的拍立得墙：每张照片的倾斜角、胶带颜色和小贴纸都由文件名
+ * 哈希决定（刷新不乱跳），悬停扶正抬起，单击走 Lightbox，右下角 ♡ 收进「心动」
+ * （存 localStorage，只在这台设备上）。封面两侧的散落拍立得只在宽屏出现。
+ * PHOTOS 变化（线上上传合并）时 ForeverAlbum.mergeUploads 会调 build() 重建。 */
+const PhotoWall = {
+  LOVED_KEY: "wallLoved",
+  TAPES: ["pink", "blue", "lilac", "butter", "mint"],
+  STICKERS: ["♡", "✦", "☁", "✿"],
+  COVER_COUNT: 6,
+  loved: new Set(),
+  onlyLoved: false,
+  io: null,
+  init() {
+    try { this.loved = new Set(JSON.parse(localStorage.getItem(this.LOVED_KEY) || "[]")); } catch (e) { /* 坏数据当空 */ }
+    $("#toWall").addEventListener("click", () => $("#wall").scrollIntoView({ behavior: "smooth" }));
+    $("#wallLoved").addEventListener("click", () => {
+      this.onlyLoved = !this.onlyLoved;
+      this.applyFilter();
+    });
+    // 卡片进入视口才淡入；不支持 IO 的浏览器直接显示
+    if ("IntersectionObserver" in window) {
+      this.io = new IntersectionObserver((list) => {
+        for (const e of list) {
+          if (!e.isIntersecting) continue;
+          e.target.classList.add("in");
+          this.io.unobserve(e.target);
+        }
+      }, { rootMargin: "0px 0px -6% 0px" });
+    }
+    this.build();
+  },
+  // 稳定的伪随机：同一张照片每次得到同样的角度和装饰
+  hash(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+    return (h >>> 0) / 4294967296;
+  },
+  key: (p) => p.uploadId || p.src,
+  monthLabel(ym) {
+    if (!ym) return { zh: "还没标日期的", en: "Someday" };
+    const [y, m] = ym.split("-").map(Number);
+    const zh = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"][m - 1];
+    const en = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1];
+    return { zh: y + " · " + zh + "月", en: en + ". " + y, short: m + "月" };
+  },
+  card(i, extraCls) {
+    const p = PHOTOS[i];
+    const k = this.key(p);
+    const r = this.hash(k), r2 = this.hash(k + "#");
+    const fig = el("figure", "pc" + (extraCls ? " " + extraCls : ""));
+    fig.dataset.key = k;
+    fig.style.setProperty("--tilt", ((r - 0.5) * 7).toFixed(2) + "deg");
+    fig.style.setProperty("--tape-tilt", ((r2 - 0.5) * 14).toFixed(1) + "deg");
+    fig.dataset.tape = this.TAPES[Math.floor(r2 * this.TAPES.length)];
+    // 大约每五张有一张角上贴个小贴纸，别太满
+    if (r2 > 0.8) fig.dataset.sticker = this.STICKERS[Math.floor(r * this.STICKERS.length)];
+
+    const open = el("button", "pc-open");
+    open.type = "button";
+    open.setAttribute("aria-label", "看大图：" + photoName(p));
+    const frame = el("span", "pc-img");
+    const img = el("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.addEventListener("load", () => fig.classList.add("loaded"), { once: true });
+    setThumb(img, p);
+    frame.appendChild(img);
+    const cap = el("figcaption", "pc-cap");
+    cap.textContent = photoName(p);
+    open.append(frame, cap);
+    open.addEventListener("click", () => Lightbox.open(i));
+
+    const heart = el("button", "pc-heart");
+    heart.type = "button";
+    heart.innerHTML = '<svg viewBox="0 0 100 92" aria-hidden="true"><path d="M50 84 C22 62 4 44 4 26 C4 11 15 3 27 3 C37 3 45 9 50 18 C55 9 63 3 73 3 C85 3 96 11 96 26 C96 44 78 62 50 84 Z"/></svg>';
+    this.paintHeart(heart, this.loved.has(k));
+    heart.addEventListener("click", () => this.toggleLove(k, heart));
+
+    fig.append(open, heart);
+    return fig;
+  },
+  paintHeart(btn, on) {
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.setAttribute("aria-label", on ? "取消心动" : "加入心动");
+  },
+  toggleLove(k, btn) {
+    const on = !this.loved.has(k);
+    if (on) this.loved.add(k); else this.loved.delete(k);
+    localStorage.setItem(this.LOVED_KEY, JSON.stringify([...this.loved]));
+    // 封面和墙上可能是同一张：两处的 ♡ 一起变
+    document.querySelectorAll("#page-home .pc").forEach((f) => {
+      if (f.dataset.key === k) this.paintHeart(f.querySelector(".pc-heart"), on);
+    });
+    if (on) { btn.classList.remove("pop"); void btn.offsetWidth; btn.classList.add("pop"); }
+    this.updateCount();
+    if (this.onlyLoved) this.applyFilter();
+  },
+  updateCount() {
+    const keys = new Set(PHOTOS.map(this.key));
+    $("#wallLovedN").textContent = [...this.loved].filter((k) => keys.has(k)).length;
+  },
+  build() {
+    const body = $("#wallBody");
+    const months = $("#wallMonths");
+    body.replaceChildren();
+    months.replaceChildren();
+    // 新的在上：最近的月份放最前，月内按日期从早到晚
+    const groups = new Map();
+    PHOTOS.forEach((p, i) => {
+      const ym = (p.date || "").slice(0, 7);
+      if (!groups.has(ym)) groups.set(ym, []);
+      groups.get(ym).push(i);
+    });
+    const order = [...groups.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : b.localeCompare(a)));
+    $("#wallSub").textContent = PHOTOS.length
+      ? `${PHOTOS.length} 张照片，${order.filter(Boolean).length} 个月份，一张一张钉上来的`
+      : "照片还在路上，传一张上来，这面墙就亮了。";
+    for (const ym of order) {
+      const lab = this.monthLabel(ym);
+      const sec = el("section", "wall-month");
+      sec.id = "wall-" + (ym || "someday");
+      const h = el("h3", "wm-head");
+      const zh = el("span", "wm-zh");
+      zh.textContent = lab.zh;
+      const en = el("span", "wm-en");
+      en.textContent = lab.en;
+      const n = el("span", "wm-n");
+      n.textContent = groups.get(ym).length + " 张";
+      h.append(zh, en, n);
+      const grid = el("div", "wm-grid");
+      for (const i of groups.get(ym)) {
+        // 约每七张挑一张放大成跨两格的「大图」，同一张照片每次都一样
+        const c = this.card(i, this.hash(this.key(PHOTOS[i]) + "big") < 0.14 ? "pc-big" : "");
+        grid.appendChild(c);
+        if (this.io) this.io.observe(c); else c.classList.add("in");
+      }
+      sec.append(h, grid);
+      body.appendChild(sec);
+
+      const chip = el("button", "wm-chip");
+      chip.type = "button";
+      chip.textContent = ym ? lab.short : "未标日期";
+      chip.title = lab.zh;
+      chip.addEventListener("click", () => sec.scrollIntoView({ behavior: "smooth" }));
+      months.appendChild(chip);
+    }
+    this.buildCover();
+    this.updateCount();
+    this.applyFilter();
+  },
+  // 封面两侧散落的拍立得：每次进站随机挑几张横竖都有的照片
+  buildCover() {
+    const box = $("#coverScatter");
+    box.replaceChildren();
+    if (!PHOTOS.length) return;
+    const pool = PHOTOS.map((_, i) => i).sort(() => Math.random() - 0.5);
+    pool.slice(0, Math.min(this.COVER_COUNT, PHOTOS.length)).forEach((i, n) => {
+      const c = this.card(i, "pc-cover in");
+      c.style.setProperty("--slot", n);
+      box.appendChild(c);
+    });
+  },
+  applyFilter() {
+    const btn = $("#wallLoved");
+    btn.setAttribute("aria-pressed", this.onlyLoved ? "true" : "false");
+    let shown = 0;
+    document.querySelectorAll("#wallBody .wall-month").forEach((sec) => {
+      let n = 0;
+      sec.querySelectorAll(".pc").forEach((c) => {
+        const vis = !this.onlyLoved || this.loved.has(c.dataset.key);
+        c.hidden = !vis;
+        if (vis) n++;
+      });
+      sec.hidden = n === 0;
+      shown += n;
+    });
+    $("#wallMonths").hidden = this.onlyLoved;
+    $("#wallEmpty").hidden = !(this.onlyLoved && shown === 0);
+  },
+};
 
 /* ---------- 3D 旋转相册（无限环） ----------
  * 每张卡片保持照片的真实宽高比：横图就是横的、竖图就是竖的，一律不裁剪。
@@ -1951,7 +2116,6 @@ function buildTimeline() {
 const Lightbox = {
   idx: 0,
   resumeGalaxy: false,
-  homePolaroid: false,
   init() {
     $("#lbClose").addEventListener("click", () => this.close());
     $("#lbPrev").addEventListener("click", () => this.step(-1));
@@ -1966,14 +2130,13 @@ const Lightbox = {
       if (e.key === "ArrowRight") this.step(1);
     });
   },
-  open(i, opts) {
+  open(i) {
     const box = $("#lightbox");
     // 星河的照片层是持续变化的 3D 合成层；隔着 backdrop-filter 继续推进和
     // 回收槽位会产生明显闪烁。首次打开时暂停，翻页不重复改写恢复状态。
     if (!box.classList.contains("open")) {
       this.resumeGalaxy = document.body.dataset.mode === "galaxy" && Galaxy.running;
       if (this.resumeGalaxy) Galaxy.running = false;
-      this.homePolaroid = !!(opts && opts.homePolaroid);
     }
     this.idx = i;
     this.render();
@@ -1981,12 +2144,8 @@ const Lightbox = {
   },
   close() {
     $("#lightbox").classList.remove("open");
-    if (this.homePolaroid && HOME_POLAROID.render && PHOTOS.length) {
-      HOME_POLAROID.render(this.idx);
-    }
     if (this.resumeGalaxy && document.body.dataset.mode === "galaxy") Galaxy.running = true;
     this.resumeGalaxy = false;
-    this.homePolaroid = false;
   },
   step(d) { this.open((this.idx + d + PHOTOS.length) % PHOTOS.length); },
   render() {
@@ -2216,6 +2375,7 @@ const ModeSettings = {
   initStarlight();
   initNav();
   initHome();
+  PhotoWall.init();
   initLetter();
   initMusic();
   Lightbox.init();
@@ -2245,7 +2405,7 @@ const ModeSettings = {
       PHOTOS = next;
       if (PHOTOS.length) { Ring.build(); Galaxy.buildPhotos(); }
       else { Ring.ring.replaceChildren(); Ring.slots=[]; Galaxy.space.replaceChildren(); Galaxy.items=[]; }
-      if (HOME_POLAROID.render && PHOTOS.length) HOME_POLAROID.render(Math.min(Math.max(HOME_POLAROID.idx,0),PHOTOS.length-1));
+      PhotoWall.build();
       if (document.body.dataset.mode === 'slideshow') {
         if(PHOTOS.length) Slideshow.go(Math.min(Slideshow.idx,PHOTOS.length-1),true);
         else { Slideshow.leave(); Slideshow.a.style.backgroundImage=''; Slideshow.b.style.backgroundImage=''; }
