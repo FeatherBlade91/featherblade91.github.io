@@ -18,7 +18,13 @@ const photoName = (p) =>
   (p.caption || "").trim() ||
   decodeURIComponent(p.src.split("/").pop() || "").replace(/\.[^.]+$/, "");
 // 相机记录的是拍摄地的钟表时间，直接显示，避免浏览器按时区换算。
-const photoDateTime = (p) => p.date && p.captureTime ? p.date + " " + p.captureTime : (p.date || "");
+const photoDateTime = (p) => [p.date, p.captureTime || p.savedTime].filter(Boolean).join(" ");
+function photoDateLabel(p) {
+  const when = photoDateTime(p);
+  if (p.savedTime) return when + "（微信保存）";
+  if (p.dateSource === "screenshot") return when + "（截图）";
+  return when;
+}
 // 列表场景用 thumbs/ 小图（由 tools/make_thumbs.py 生成），加载失败回退原图
 const thumbSrc = (p) => p.thumb || p.src.replace(/^photos\//, "thumbs/");
 function setThumb(img, p) {
@@ -835,7 +841,7 @@ const Ring = {
     s.cap.textContent = photoName(p);
     // 奶油纸背：照片名是唯一主角，日期有就带上一小行
     s.backName.textContent = photoName(p);
-    s.backDate.textContent = photoDateTime(p);
+    s.backDate.textContent = photoDateLabel(p);
   },
   fitCard(s) {
     const nw = s.img.naturalWidth, nh = s.img.naturalHeight;
@@ -867,7 +873,7 @@ const Ring = {
     box.replaceChildren(name);
     if (p.date) {
       const d = el("span", "rn-date");
-      d.textContent = photoDateTime(p);
+      d.textContent = photoDateLabel(p);
       box.appendChild(d);
     }
   },
@@ -2048,7 +2054,7 @@ const Slideshow = {
     const cap = $("#slideCaption");
     $("#slideCapTitle").textContent = name;
     const d = $("#slideCapDate");
-    d.textContent = photoDateTime(p);
+    d.textContent = photoDateLabel(p);
     d.style.display = p.date ? "" : "none";
     cap.style.display = name ? "" : "none";
     $("#slideCounter").textContent =
@@ -2085,7 +2091,7 @@ function buildTimeline() {
     // 日期、标题留空则不显示对应词条
     if (p.date || p.milestone || hit) {
       const date = el("div", "tl-date");
-      date.textContent = photoDateTime(p);
+      date.textContent = photoDateLabel(p);
       if (p.milestone || hit) {
         const tag = el("span", "tl-milestone");
         tag.textContent = hit ? hit.title : "纪念日";
@@ -2162,8 +2168,8 @@ const Lightbox = {
     const p = PHOTOS[this.idx];
     $("#lbImg").src = p.src;
     $("#lbImg").alt = photoName(p);
-    $("#lbCaption").textContent = p.date && p.captureTime
-      ? photoName(p) + " · " + photoDateTime(p)
+    $("#lbCaption").textContent = p.date && (p.captureTime || p.savedTime)
+      ? photoName(p) + " · " + photoDateLabel(p)
       : photoName(p);
   },
 };
