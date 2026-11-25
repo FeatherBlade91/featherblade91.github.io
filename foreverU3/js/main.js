@@ -388,7 +388,7 @@ const PhotoWall = {
     const cap = el("figcaption", "pc-cap");
     cap.textContent = photoName(p);
     open.append(frame, cap);
-    open.addEventListener("click", () => Lightbox.open(i));
+    open.addEventListener("click", () => Lightbox.open(i, this.order));
 
     const heart = el("button", "pc-heart");
     heart.type = "button";
@@ -425,18 +425,19 @@ const PhotoWall = {
     const months = $("#wallMonths");
     body.replaceChildren();
     months.replaceChildren();
-    // 新的在上：最近的月份放最前，月内按日期从早到晚
+    // 每次重建都按拍摄时间从新到旧；相同时沿用相册顺序，未标日期的排在最后。
+    this.order = PHOTOS.map((_, i) => i).sort((a, b) =>
+      photoDateTime(PHOTOS[b]).localeCompare(photoDateTime(PHOTOS[a])));
     const groups = new Map();
-    PHOTOS.forEach((p, i) => {
-      const ym = (p.date || "").slice(0, 7);
+    for (const i of this.order) {
+      const ym = (PHOTOS[i].date || "").slice(0, 7);
       if (!groups.has(ym)) groups.set(ym, []);
       groups.get(ym).push(i);
-    });
-    const order = [...groups.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : b.localeCompare(a)));
+    }
     $("#wallSub").textContent = PHOTOS.length
-      ? `${PHOTOS.length} 张照片，${order.filter(Boolean).length} 个月份，一张一张钉上来的`
+      ? `${PHOTOS.length} 张照片，${groups.size - Number(groups.has(""))} 个月份，一张一张钉上来的`
       : "照片还在路上，传一张上来，这面墙就亮了。";
-    for (const ym of order) {
+    for (const [ym, indices] of groups) {
       const lab = this.monthLabel(ym);
       const sec = el("section", "wall-month");
       sec.id = "wall-" + (ym || "someday");
@@ -446,10 +447,10 @@ const PhotoWall = {
       const en = el("span", "wm-en");
       en.textContent = lab.en;
       const n = el("span", "wm-n");
-      n.textContent = groups.get(ym).length + " 张";
+      n.textContent = indices.length + " 张";
       h.append(zh, en, n);
       const grid = el("div", "wm-grid");
-      for (const i of groups.get(ym)) {
+      for (const i of indices) {
         // 约每七张挑一张放大成跨两格的「大图」，同一张照片每次都一样
         const c = this.card(i, this.hash(this.key(PHOTOS[i]) + "big") < 0.14 ? "pc-big" : "");
         grid.appendChild(c);
@@ -2132,7 +2133,7 @@ const Lightbox = {
       if (e.key === "ArrowRight") this.step(1);
     });
   },
-  open(i) {
+  open(i, order = null) {
     const box = $("#lightbox");
     // 星河的照片层是持续变化的 3D 合成层；隔着 backdrop-filter 继续推进和
     // 回收槽位会产生明显闪烁。首次打开时暂停，翻页不重复改写恢复状态。
@@ -2141,6 +2142,7 @@ const Lightbox = {
       if (this.resumeGalaxy) Galaxy.running = false;
     }
     this.idx = i;
+    this.order = order;
     this.render();
     box.classList.add("open");
   },
@@ -2149,7 +2151,13 @@ const Lightbox = {
     if (this.resumeGalaxy && document.body.dataset.mode === "galaxy") Galaxy.running = true;
     this.resumeGalaxy = false;
   },
-  step(d) { this.open((this.idx + d + PHOTOS.length) % PHOTOS.length); },
+  step(d) {
+    const order = this.order;
+    const count = order ? order.length : PHOTOS.length;
+    const pos = order ? order.indexOf(this.idx) : this.idx;
+    const next = (pos + d + count) % count;
+    this.open(order ? order[next] : next, order);
+  },
   render() {
     const p = PHOTOS[this.idx];
     $("#lbImg").src = p.src;

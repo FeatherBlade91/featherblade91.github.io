@@ -692,7 +692,7 @@ body[data-mode="slideshow"] .nav-pill.active {
 .wm-en { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 19px; color: var(--pink-deep); }
 .wm-n { margin-left: auto; font-size: 12px; letter-spacing: 2px; color: var(--ink-soft); }
 .wm-grid {
-  display: grid; gap: 34px 26px; grid-auto-flow: dense;
+  display: grid; gap: 34px 26px;
   grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
   padding: 0 6px;
 }
