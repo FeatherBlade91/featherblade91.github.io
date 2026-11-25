@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💗</text></svg>" />
   <link rel="preload" href="fonts/cormorantgaramond-600i-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="css/fonts.css" />
-  <link rel="stylesheet" href="css/style.css?v=20260825" />
+  <link rel="stylesheet" href="css/style.css?v=20261125" />
   <link rel="stylesheet" href="css/chat.css?v=20261125" />
   <link rel="stylesheet" href="css/questions.css?v=20260925" />
 </head>
@@ -58,6 +58,7 @@
     <button class="nav-pill" data-mode="ring"><span class="nav-zh">3D 相册</span><span class="nav-en">Ring</span></button>
     <button class="nav-pill" data-mode="galaxy"><span class="nav-zh">星河漫游</span><span class="nav-en">Orbit</span></button>
     <button class="nav-pill" data-mode="slideshow"><span class="nav-zh">幻灯片</span><span class="nav-en">Film</span></button>
+    <button class="nav-pill" data-mode="wishes"><span class="nav-zh">心愿清单</span><span class="nav-en">Wishes</span></button>
   </nav>
 
   <main id="app">
@@ -154,6 +155,28 @@
       </div>
     </section>
 
+    <!-- ===== 心愿清单：一起想做的事，做完就打卡（逻辑在 js/wishes.js） ===== -->
+    <section class="mode-page" id="page-wishes">
+      <div class="wish-wrap">
+        <header class="wish-head">
+          <div class="hero-badge">✦ Wish List ✦</div>
+          <h2 class="wish-title">想和你一起做的事</h2>
+          <p class="wish-progress" id="wishProgress"></p>
+        </header>
+        <div class="wish-toolbar">
+          <div class="wish-filters" role="tablist" aria-label="筛选心愿">
+            <button type="button" role="tab" data-filter="all" aria-selected="true">全部</button>
+            <button type="button" role="tab" data-filter="todo" aria-selected="false">还想做</button>
+            <button type="button" role="tab" data-filter="done" aria-selected="false">已完成</button>
+          </div>
+          <button type="button" class="wish-add" id="wishAdd">＋ 许个心愿</button>
+        </div>
+        <p class="wish-notice" id="wishNotice" role="status"></p>
+        <ol class="wish-list" id="wishList" aria-live="polite"></ol>
+        <p class="wish-empty" id="wishEmpty" hidden></p>
+      </div>
+    </section>
+
     <!-- 时间轴暂时下线：照片时间尚未标注，恢复时把下面的导航和本区块加回即可 -->
 
   </main>
@@ -200,16 +223,13 @@
       <header class="chat-header">
         <h2 id="chatTitle">对话</h2>
         <span class="chat-status" id="chatStatus" role="status"></span>
-        <button class="chat-text-btn" id="chatLogout" type="button" hidden>退出</button>
         <button class="chat-icon" id="chatClose" type="button" aria-label="关闭">✕</button>
       </header>
-      <form class="chat-login" id="chatLogin">
-        <fieldset class="chat-identities"><legend class="chat-sr-only">身份</legend><label><input type="radio" name="identity" value="LYK" checked/><span>LYK</span></label><label><input type="radio" name="identity" value="DMY"/><span>DMY</span></label></fieldset>
-        <label class="chat-sr-only" for="chatPassword">密码</label>
-        <input id="chatPassword" class="chat-password" type="password" autocomplete="current-password" placeholder="密码" required minlength="8" maxlength="128" />
+      <div class="chat-login" id="chatLogin">
+        <p class="chat-login-lead">登录后就能开始对话。</p>
         <p class="chat-error" id="chatLoginError" role="alert"></p>
-        <button class="chat-primary" id="chatLoginButton" type="submit">登录</button>
-      </form>
+        <button class="chat-primary" id="chatLoginButton" type="button">登录</button>
+      </div>
       <section class="chat-conversation" id="chatConversation" aria-label="聊天内容" hidden>
         <div class="chat-scroll" id="chatScroll" tabindex="0" aria-label="消息记录">
           <button class="chat-history chat-text-btn" id="chatHistory" type="button" hidden>更早的消息</button>
@@ -229,12 +249,16 @@
   </dialog>
   <script src="js/config.js"></script>
   <script src="js/music.js?v=20260825"></script>
-  <script src="js/main.js?v=20261125"></script>
+  <script src="js/main.js?v=20261125b"></script>
   <script defer src="js/vendor/supabase-2.117.1.js"></script>
   <script defer src="js/chat-config.js?v=20260925"></script>
+  <link rel="stylesheet" href="css/auth.css?v=20261125" />
+  <script defer src="js/auth.js?v=20261125"></script>
   <script defer src="js/questions.js?v=20260925"></script>
-  <script defer src="js/chat.js?v=20261125"></script>
+  <script defer src="js/chat.js?v=20261125b"></script>
   <link rel="stylesheet" href="css/upload.css?v=20260925" />
-  <script defer src="js/upload.js?v=20260925"></script>
+  <script defer src="js/upload.js?v=20261125"></script>
+  <link rel="stylesheet" href="css/wishes.css?v=20261125" />
+  <script defer src="js/wishes.js?v=20261125"></script>
 </body>
 </html>

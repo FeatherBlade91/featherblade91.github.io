@@ -1,0 +1,42 @@
+/* 全站登录：右上角头像按钮 + 登录 / 账号弹窗（逻辑在 js/auth.js） */
+.auth-btn { top: 20px; right: 76px; color: var(--chrome-fg); }
+.auth-btn.signed-in {
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  font-size: 12px; letter-spacing: 0.5px; color: var(--chrome-accent);
+}
+.auth-dialog {
+  margin: auto; width: min(380px, calc(100vw - 28px)); padding: 26px;
+  border: 1px solid #fff; border-radius: 24px; background: #f6f5fc; color: var(--ink);
+  box-shadow: 0 24px 80px #24314a40;
+}
+.auth-dialog::backdrop { background: #24314a55; backdrop-filter: blur(3px); }
+.auth-dialog header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.auth-dialog h2 { font: 24px var(--font-serif); }
+.auth-close { width: 32px; height: 32px; border-radius: 8px; color: var(--ink-soft); }
+.auth-close:hover { background: #ffffffb0; }
+.auth-dialog form, .auth-dialog [data-account] { display: grid; gap: 12px; }
+.auth-lead { font-size: 13px; line-height: 1.8; color: var(--ink-soft); }
+.auth-lead strong { color: var(--pink-deep); font-weight: 600; }
+.auth-identities { border: 0; display: flex; gap: 8px; }
+.auth-identities label { flex: 1; position: relative; cursor: pointer; }
+.auth-identities input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.auth-identities span {
+  display: block; padding: 10px; text-align: center; border-radius: 12px;
+  border: 1px solid #cad5e7; background: #fff;
+  font: italic 600 17px var(--font-display); letter-spacing: 1px;
+}
+.auth-identities input:checked + span { color: #fff; border-color: transparent; background: linear-gradient(120deg, var(--blue-2), var(--lavender) 52%, var(--pink-2)); }
+.auth-identities input:focus-visible + span { outline: 2px solid var(--blue-deep); outline-offset: 2px; }
+.auth-password { width: 100%; padding: 11px 12px; border: 1px solid #cad5e7; border-radius: 12px; background: #fff; color: var(--ink); font: 14px var(--font-main); }
+.auth-primary, .auth-secondary { width: 100%; padding: 11px; border-radius: 12px; font: 500 14px var(--font-main); }
+.auth-primary { color: #fff; background: linear-gradient(120deg, var(--pink-2), var(--pink-deep)); box-shadow: 0 8px 20px rgba(238, 95, 155, 0.3); }
+.auth-secondary { background: #e0eafb; color: #354b74; }
+.auth-primary:disabled, .auth-secondary:disabled { opacity: 0.5; cursor: wait; }
+.auth-error { color: #a34061; font-size: 13px; }
+.auth-error:empty { display: none; }
+.auth-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.auth-dialog [hidden] { display: none !important; }
+@media (max-width: 960px) {
+  .auth-btn { top: 14px; right: 64px; }
+  .auth-password { font-size: 16px; }
+}

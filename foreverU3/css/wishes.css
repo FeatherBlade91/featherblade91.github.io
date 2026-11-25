@@ -1,0 +1,129 @@
+/* ===== 心愿清单（逻辑在 js/wishes.js） ===== */
+.wish-wrap { max-width: 760px; margin: 0 auto; }
+.wish-head { text-align: center; margin-bottom: 26px; }
+.wish-title { margin-top: 18px; font: 600 30px var(--font-serif); letter-spacing: 4px; color: var(--ink); }
+.wish-progress { margin-top: 10px; font-family: var(--font-serif); font-size: 13.5px; letter-spacing: 2px; color: var(--ink-soft); }
+.wish-progress:empty { display: none; }
+
+.wish-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.wish-filters {
+  display: flex; gap: 4px; padding: 4px; border-radius: 999px;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+.wish-filters button { padding: 7px 16px; border-radius: 999px; font-size: 13px; color: var(--ink-soft); transition: all 0.25s var(--ease-out); }
+.wish-filters button:hover { color: var(--pink-deep); }
+.wish-filters button[aria-selected="true"] {
+  color: #fff; text-shadow: 0 1px 3px rgba(62, 74, 107, 0.4);
+  background: linear-gradient(120deg, var(--blue-2), var(--lavender) 52%, var(--pink-2));
+}
+.wish-add {
+  padding: 10px 22px; border-radius: 999px; font: 14px var(--font-serif); letter-spacing: 1px; color: #fff;
+  background: linear-gradient(120deg, var(--pink-2), var(--pink-deep));
+  box-shadow: 0 8px 20px rgba(238, 95, 155, 0.3);
+  transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+}
+.wish-add:hover { transform: translateY(-1px); box-shadow: 0 12px 26px rgba(238, 95, 155, 0.4); }
+.wish-add[hidden] { display: none; }
+.wish-notice { text-align: center; font-size: 13px; color: #a34061; margin-bottom: 12px; }
+.wish-notice:empty { display: none; }
+
+.wish-list { list-style: none; display: grid; gap: 14px; }
+.wish-card { display: grid; grid-template-columns: 30px 1fr; gap: 6px 14px; padding: 18px 20px; border-radius: 20px; }
+.wish-mark {
+  width: 26px; height: 26px; margin-top: 2px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 14px; color: #fff;
+  border: 1.5px solid rgba(122, 168, 224, 0.6); background: rgba(255, 255, 255, 0.7);
+}
+.wish-card.done .wish-mark {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--blue-2), var(--pink-2));
+  box-shadow: 0 0 0 4px rgba(255, 166, 198, 0.25);
+}
+.wish-body { min-width: 0; }
+.wish-name { font: 600 17px/1.5 var(--font-serif); color: var(--ink); overflow-wrap: anywhere; }
+.wish-detail, .wish-note { margin-top: 4px; font-size: 14px; line-height: 1.7; color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.wish-note {
+  margin-top: 10px; padding: 10px 14px; border-radius: 12px; color: var(--ink);
+  background: rgba(255, 255, 255, 0.55); border-left: 3px solid var(--pink-2);
+}
+.wish-meta { margin-top: 6px; font-size: 12px; letter-spacing: 1px; color: var(--ink-soft); opacity: 0.85; }
+.wish-card.done .wish-meta { color: var(--pink-deep); opacity: 1; }
+
+.wish-photos { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.wish-photo {
+  width: 108px; padding: 6px 6px 8px; border-radius: 6px; background: #fff;
+  box-shadow: 0 6px 16px rgba(104, 128, 196, 0.18); text-align: center;
+  transition: transform 0.25s var(--ease-out);
+}
+.wish-photo:nth-child(odd) { transform: rotate(-1.5deg); }
+.wish-photo:nth-child(even) { transform: rotate(1.5deg); }
+.wish-photo:hover:not(:disabled) { transform: translateY(-2px) rotate(0); }
+.wish-photo img { display: block; width: 96px; height: 96px; object-fit: cover; border-radius: 2px; }
+.wish-photo.pending { height: 126px; display: grid; place-items: center; cursor: default; background: rgba(255, 255, 255, 0.6); }
+.wish-photo-cap {
+  display: block; margin-top: 6px; font: 12px var(--font-serif); color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wish-photo.pending .wish-photo-cap { color: var(--ink-soft); white-space: normal; }
+
+.wish-actions { grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.wish-act { padding: 6px 12px; border-radius: 10px; font-size: 12.5px; color: #354b74; background: rgba(224, 234, 251, 0.8); transition: background 0.2s ease; }
+.wish-act:hover { background: #e0eafb; }
+.wish-act.primary { color: #fff; background: linear-gradient(120deg, var(--blue-2), var(--pink-2)); }
+.wish-act.danger { color: #a34061; background: rgba(255, 255, 255, 0.6); }
+.wish-act.danger:hover { background: #fde8ef; }
+.wish-empty { text-align: center; color: var(--ink-soft); padding: 40px 0; font-family: var(--font-serif); letter-spacing: 1px; }
+
+/* 弹窗：与上传 / 登录弹窗同一套样子 */
+.wish-dialog {
+  margin: auto; width: min(560px, calc(100vw - 28px)); max-height: 88dvh; padding: 26px;
+  border: 1px solid #fff; border-radius: 24px; background: #f6f5fc; color: var(--ink);
+  box-shadow: 0 24px 80px #24314a40; overflow: auto;
+}
+.wish-dialog::backdrop { background: #24314a55; backdrop-filter: blur(3px); }
+.wish-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.wish-dialog h2 { font: 22px var(--font-serif); overflow-wrap: anywhere; }
+.wish-close { flex-shrink: 0; width: 32px; height: 32px; border-radius: 8px; color: var(--ink-soft); }
+.wish-close:hover { background: #ffffffb0; }
+.wish-dialog form { display: grid; gap: 14px; }
+.wish-field { display: grid; gap: 6px; font-size: 13px; }
+.wish-field > span { color: var(--ink-soft); }
+.wish-dialog input:not([type=file]), .wish-dialog textarea {
+  width: 100%; max-width: 100%; padding: 10px; border: 1px solid #cad5e7; border-radius: 9px;
+  background: #fff; color: var(--ink); font: 14px/1.6 var(--font-main);
+}
+.wish-dialog textarea { resize: vertical; min-height: 76px; }
+.wish-dialog input:disabled { color: var(--ink-soft); background: #f1f2f7; }
+.wish-file { font-size: 13px; max-width: 100%; }
+.wish-pick-list { display: grid; gap: 8px; }
+.wish-pick-list:empty { display: none; }
+.wish-pick { display: grid; grid-template-columns: 52px 1fr auto; align-items: center; gap: 10px; padding: 8px; border-radius: 12px; background: #ffffffb0; }
+.wish-pick img { width: 52px; height: 52px; object-fit: cover; border-radius: 6px; background: #e8ebf3; }
+.wish-pick-name { font-size: 13px; overflow-wrap: anywhere; }
+.wish-pick-remove { padding: 6px 10px; border-radius: 9px; font-size: 12px; color: #a34061; background: #fff; }
+.wish-pick-remove:disabled { color: var(--ink-soft); cursor: default; }
+.wish-hint { font-size: 12.5px; line-height: 1.8; color: var(--ink-soft); }
+.wish-submit { display: grid; gap: 8px; }
+.wish-error { color: #a34061; font-size: 13px; }
+.wish-error:empty { display: none; }
+.wish-primary {
+  padding: 11px; border-radius: 12px; font: 500 14px var(--font-main); color: #fff;
+  background: linear-gradient(120deg, var(--pink-2), var(--pink-deep));
+  box-shadow: 0 8px 20px rgba(238, 95, 155, 0.3);
+}
+.wish-primary.danger { background: #c4456f; box-shadow: none; }
+.wish-primary:disabled { opacity: 0.6; cursor: wait; }
+
+@media (max-width: 600px) {
+  .wish-title { font-size: 24px; letter-spacing: 2px; }
+  .wish-card { padding: 16px 14px; gap: 6px 10px; grid-template-columns: 26px 1fr; }
+  .wish-actions { grid-column: 1 / -1; }
+  .wish-photo { width: 92px; }
+  .wish-photo img { width: 80px; height: 80px; }
+  .wish-dialog { padding: 20px; }
+  .wish-dialog input:not([type=file]), .wish-dialog textarea { font-size: 16px; }
+  .wish-pick { grid-template-columns: 44px 1fr; }
+  .wish-pick img { width: 44px; height: 44px; }
+  .wish-pick-remove { grid-column: 2; justify-self: start; }
+}

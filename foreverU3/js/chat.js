@@ -2,12 +2,12 @@
 (() => {
   'use strict';
   const byId = id => document.getElementById(id);
-  const ui = Object.fromEntries(['Toggle','Dialog','Close','Status','Logout','Login','Password',
+  const ui = Object.fromEntries(['Toggle','Dialog','Close','Status','Login',
     'LoginError','LoginButton','Conversation','Scroll','History','Empty','Messages','New',
     'SyncError','Compose','Input','Counter','Send','Badge'].map(k => [k, byId('chat' + k)]));
-  const config = window.FOREVER_CHAT_CONFIG;
+  const auth = window.ForeverAuth;
   let client, user = null, member = null, channel = null, epoch = 0, activeId = null;
-  let rows = new Map(), unread = 0, watermark = 0, ready = false, loading = false;
+  let rows = new Map(), unread = 0, watermark = 0, ready = false;
   let syncing = false, syncAgain = false, paging = false, realtime = false;
   const table = 'forever_chat_messages';
   const pageSize = 60;
@@ -236,15 +236,17 @@
       render();
     }
   }
-  async function sessionChanged(session) {
-    const id = session?.user?.id || null;
+  async function authChanged(state, reason) {
+    const id = state?.user?.id || null;
     if (id === activeId) return;
+    // Leaving on purpose discards this identity's unsent drafts in this tab.
+    if (reason === 'signout' && user) { try { sessionStorage.removeItem(pendingKey()); } catch (_) {} }
     activeId = id;
     const current = ++epoch;
     const oldChannel = channel;
     channel = null;
     if (oldChannel) client.removeChannel(oldChannel);
-    user = session?.user || null;
+    user = state?.user || null;
     member = null;
     rows = new Map();
     questions?.reset();
@@ -255,25 +257,14 @@
     ui.SyncError.textContent = '';
     ui.Conversation.hidden = true;
     ui.Login.hidden = false;
-    ui.Logout.hidden = true;
     updateComposer();
-    if (!user) { status(''); return; }
     status('');
-    const {data,error} = await client.from('forever_chat_members').select('name').eq('user_id',user.id).maybeSingle();
-    if (current !== epoch) return;
-    if (error || !data) {
-      ui.LoginError.textContent = error ? '暂时无法验证身份，请稍后重新登录。' : '这个账号还不是对话成员。';
-      await client.auth.signOut({scope:'local'});
-      return;
-    }
-    member = data;
+    if (!user) return;
+    member = {name: state.name};
     restorePending();
     ui.Login.hidden = true;
     ui.Conversation.hidden = false;
     ui.Conversation.dataset.identity = member.name;
-    ui.Logout.hidden = false;
-    ui.Logout.textContent = '退出';
-    ui.Password.value = '';
     channel = client.channel('foreveru-chat-' + user.id)
       .on('postgres_changes',{event:'INSERT',schema:'public',table}, payload => {
         if (current === epoch) merge([payload.new],true);
@@ -322,30 +313,9 @@
     send(row);
     ui.Input.focus();
   });
-  ui.Login.addEventListener('submit',async event=>{
-    event.preventDefault();
-    if (loading || !client) return;
-    loading = true;
-    ui.LoginButton.disabled = true;
-    ui.LoginError.textContent = '';
-    const name = new FormData(ui.Login).get('identity');
-    try {
-      const {data,error} = await client.auth.signInWithPassword({email:config.accounts[name],password:ui.Password.value});
-      if (error) throw error;
-      await sessionChanged(data.session);
-    } catch (error) {
-      ui.LoginError.textContent = error.status === 400 ? '密码错误' : error.status === 429 ? '尝试过多，请稍后再试' : '网络错误';
-    } finally { loading = false; ui.LoginButton.disabled = false; }
-  });
-  ui.Logout.addEventListener('click',async()=>{
-    ui.Logout.disabled = true;
-    try {
-      if (user) { try { sessionStorage.removeItem(pendingKey()); } catch (_) {} }
-      const {error} = await client.auth.signOut({scope:'local'});
-      if (error) throw error;
-      await sessionChanged(null);
-    } catch (_) { ui.SyncError.textContent = '退出未完成，请检查网络后重试。'; }
-    finally { ui.Logout.disabled = false; }
+  ui.LoginButton.addEventListener('click',()=>{
+    ui.Dialog.close();
+    auth.open(()=>ui.Toggle.click());
   });
   window.addEventListener('online',()=>{connectionStatus();sync();});
   window.addEventListener('offline',connectionStatus);
@@ -353,32 +323,15 @@
     if (!document.hidden && user) { sync(); if (ui.Dialog.open && atBottom()) clearUnread(); }
   });
 
-  if (!window.supabase || !config?.url || !config?.publishableKey) {
+  if (!auth?.client) {
     status('无法连接','offline');
     ui.LoginError.textContent = '聊天组件加载失败，请刷新页面重试。';
     ui.LoginButton.disabled = true;
     return;
   }
-  // Bound requests, including auth, so a broken connection never leaves the UI stuck.
-  const boundedFetch = async (url,options = {}) => {
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    // Photo transfer can take longer on mobile networks; chat/auth remain bounded at 15s.
-    const timer = setTimeout(abort,String(url).includes('/storage/v1/object') ? 120000 : 15000);
-    if (options.signal?.aborted) abort();
-    options.signal?.addEventListener('abort',abort,{once:true});
-    try { return await fetch(url,{...options,signal:controller.signal}); }
-    finally { clearTimeout(timer); options.signal?.removeEventListener('abort',abort); }
-  };
-  client = window.supabase.createClient(config.url,config.publishableKey,{
-    auth:{storageKey:'foreveru-chat-auth',persistSession:true,autoRefreshToken:true,detectSessionInUrl:false},
-    global:{fetch:boundedFetch}
-  });
-  // Share one auth client with photo uploads; never create competing refresh locks.
-  window.ForeverBackend = client;
-  client.auth.onAuthStateChange((_event,session)=>{
-    // Do not await another auth operation inside Supabase's auth-lock callback.
-    setTimeout(()=>sessionChanged(session).catch(()=>status('无法连接','offline')),0);
+  client = auth.client;
+  auth.onChange((state,reason)=>{
+    authChanged(state,reason).catch(()=>status('无法连接','offline'));
   });
   setInterval(()=>{if (user && !document.hidden) sync();},30000);
   updateComposer();

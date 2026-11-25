@@ -1,11 +1,11 @@
 /* Member-only uploads. Supabase is a temporary inbox; GitHub is the durable archive. */
 (() => {
   'use strict';
-  const client=window.ForeverBackend;
+  const auth=window.ForeverAuth,client=auth?.client;
   const launch=document.createElement('button');launch.className='upload-launch';launch.textContent='＋ 上传照片';
   const dialog=document.createElement('dialog');dialog.className='upload-dialog';dialog.setAttribute('aria-labelledby','uploadTitle');
   dialog.innerHTML=`<header><h2 id="uploadTitle">把今天放进相册</h2><button type="button" data-close aria-label="关闭上传">✕</button></header>
-    <p data-login>使用你们的对话账号登录，就能上传照片。</p><button type="button" data-signin>登录</button>
+    <p data-login>登录后就能上传照片。</p><button type="button" data-signin>登录</button>
     <form hidden><label>选择照片<input name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple required></label>
     <label>拍摄日期（可不填）<input name="date" type="date"></label>
     <p>每次最多 10 张，每张不超过 12MB。JPEG 保留原文件；PNG / WebP 转为 JPEG。照片归档后会在公开相册中展示。</p>
@@ -16,7 +16,7 @@
   const retries=new Map();
   const signedCache=new Map();
   launch.onclick=()=>{dialog.showModal();sync();};q('[data-close]').onclick=()=>dialog.close();
-  q('[data-signin]').onclick=()=>{dialog.close();document.getElementById('chatToggle').click();};
+  q('[data-signin]').onclick=()=>{dialog.close();auth.open(()=>launch.click());};
   const names={staging:'等待完成上传',queued:'已上传 · 等待归档',archived:'已归档 · 正在发布',published:'已上线 · 等待清理中转',cleaned:'已上线 · 中转已清理'};
   const check=r=>{if(r.error)throw r.error;return r.data;};
   async function signed(path){
@@ -83,35 +83,46 @@
       if(r.error){const found=await client.storage.from('album-staging').download(`${task.owner}/${task.id}/${kind}.jpg`);if(found.error || found.data.size!==task[kind].size)throw r.error;}
     }
   }
+  // One photo end to end: register, send both files, mark complete. Returns the upload id.
+  async function uploadOne(file,caption,date){
+    if(!user)throw new Error('请先登录。');
+    const owner=user.id,generation=epoch;
+    const blobs=await prepare(file),id=crypto.randomUUID();
+    if(generation!==epoch)throw new Error('登录状态已变化，请重新登录后继续。');
+    check(await client.from('album_uploads').insert({id,owner_id:owner,caption:String(caption||'').trim().slice(0,200),photo_date:date||null}));
+    const task={id,owner,...blobs};retries.set(id,task);
+    await sendFiles(task);check(await client.rpc('album_finish_upload',{upload_id:id}));retries.delete(id);
+    return id;
+  }
   form.onsubmit=async event=>{
     event.preventDefault();if(busy||!user)return;
     const files=[...form.elements.photos.files];if(!files.length||files.length>10){status.textContent='每次请选择 1～10 张照片。';return;}
-    busy=true;const submit=form.querySelector('button');submit.disabled=true;const owner=user.id,generation=epoch;
+    busy=true;const submit=form.querySelector('button');submit.disabled=true;const generation=epoch;
     let successes=0;
     try{
       for(const file of files){
         if(generation!==epoch)throw new Error('登录状态已变化，请重新登录后继续。');
         status.textContent=`正在上传 ${successes+1} / ${files.length}：${file.name}`;
-        const blobs=await prepare(file),id=crypto.randomUUID();
-        check(await client.from('album_uploads').insert({id,owner_id:owner,caption:file.name.replace(/\.[^.]+$/,'').slice(0,200),photo_date:form.elements.date.value||null}));
-        const task={id,owner,...blobs};retries.set(id,task);
-        await sendFiles(task);check(await client.rpc('album_finish_upload',{upload_id:id}));retries.delete(id);successes++;
+        await uploadOne(file,file.name.replace(/\.[^.]+$/,''),form.elements.date.value);successes++;
       }
       form.reset();status.textContent=`${successes} 张照片已上传。后台归档会继续进行，可以关闭页面。`;
     }catch(error){status.textContent=`已完成 ${successes} 张。${error.message||'上传失败，请检查网络并重试。'}`;}
     finally{busy=false;submit.disabled=false;await sync();}
   };
-  async function sessionChanged(session){
-    const next=session?.user||null;if(next?.id===user?.id)return;
-    const generation=++epoch;user=next;retries.clear();signedCache.clear();if(channel){client.removeChannel(channel);channel=null;}
-    if(user){const membership=await client.from('forever_chat_members').select('name').eq('user_id',user.id).maybeSingle();if(generation!==epoch)return;if(membership.error||!membership.data)user=null;}
+  async function sessionChanged(state){
+    const next=state?.user||null;if(next?.id===user?.id)return;
+    ++epoch;user=next;retries.clear();signedCache.clear();if(channel){client.removeChannel(channel);channel=null;}
     form.hidden=!user;q('[data-login]').hidden=!!user;q('[data-signin]').hidden=!!user;status.textContent='';
     if(user)channel=client.channel('album-upload-events').on('postgres_changes',{event:'*',schema:'public',table:'album_uploads'},()=>sync()).subscribe(s=>{if(s==='SUBSCRIBED')sync();});
     await sync();
   }
+  window.ForeverUploads={
+    upload:uploadOne,
+    refresh:()=>sync()
+  };
   if(!client){status.textContent='登录服务未加载，请刷新页面。';q('[data-signin]').disabled=true;return;}
-  client.auth.onAuthStateChange((_event,session)=>setTimeout(()=>sessionChanged(session),0));
-  client.auth.getSession().then(r=>sessionChanged(r.data.session));
+  // Membership is already checked by ForeverAuth; state is null for non-members.
+  auth.onChange(state=>sessionChanged(state));
   window.addEventListener('forever-album-ready',sync);window.addEventListener('online',sync);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync();});
   setInterval(()=>{if(user&&!document.hidden)sync();},60000);

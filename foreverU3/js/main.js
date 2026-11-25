@@ -2250,8 +2250,14 @@ const ModeSettings = {
         if(PHOTOS.length) Slideshow.go(Math.min(Slideshow.idx,PHOTOS.length-1),true);
         else { Slideshow.leave(); Slideshow.a.style.backgroundImage=''; Slideshow.b.style.backgroundImage=''; }
       }
+      window.dispatchEvent(new Event('forever-album-changed'));
     },
-    openUpload(id) { const i = PHOTOS.findIndex(p => p.uploadId === id); if(i >= 0) Lightbox.open(i); }
+    openUpload(id) { const i = PHOTOS.findIndex(p => p.uploadId === id); if(i >= 0) Lightbox.open(i); },
+    // 心愿清单用：按上传 id 找相册里的照片（未归档的照片只有登录成员看得到）
+    findUpload(id) {
+      const p = PHOTOS.find(x => x.uploadId === id);
+      return p ? { thumb: thumbSrc(p), src: p.src, caption: photoName(p) } : null;
+    }
   };
   window.dispatchEvent(new Event('forever-album-ready'));
 })();

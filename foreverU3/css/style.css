@@ -261,8 +261,8 @@ body[data-mode="slideshow"] .music-times { color: rgba(255, 255, 255, 0.68); }
   box-shadow: 0 5px 14px rgba(84, 104, 172, 0.24);
 }
 .music-play:hover { color: #fff; background: linear-gradient(135deg, var(--blue-deep), var(--pink-deep)); }
-.admin-btn { top: 20px; right: 76px; color: var(--chrome-fg); font-size: 16px; }
-.settings-btn { top: 20px; right: 132px; color: var(--chrome-fg); font-size: 16px; }
+.admin-btn { top: 20px; right: 132px; color: var(--chrome-fg); font-size: 16px; }
+.settings-btn { top: 20px; right: 188px; color: var(--chrome-fg); font-size: 16px; }
 
 /* ===== 本页设置弹窗（右上角 ⚙，内容随子页面变化） ===== */
 .settings-pop {
@@ -752,7 +752,7 @@ body[data-mode="slideshow"] .nav-pill.active {
   white-space: nowrap;
 }
 .galaxy-views button:hover { transform: translateY(-1px); color: var(--chrome-fg-hover); }
-@media (max-width: 860px) {
+@media (max-width: 960px) {
   .galaxy-views { right: 12px; bottom: 76px; } /* 给底部的模式导航让位 */
   .galaxy-views button { padding: 6px 10px; font-size: 11px; }
 }
@@ -978,17 +978,17 @@ body[data-mode="slideshow"] .nav-pill.active {
 }
 
 /* ===== 响应式 ===== */
-/* 右上角现在有三个按钮（音乐 / 管理 / 设置），720–860px 的窄窗口里
- * 顶部导航条会挤到它们，断点从 720 放宽到 860，把导航条挪到底部 */
-@media (max-width: 860px) {
+/* 右上角现在有四个按钮（音乐 / 登录 / 管理 / 设置），导航也多了「心愿清单」，
+ * 960px 以下顶部导航条会挤到它们，断点放宽到 960，把导航条挪到底部 */
+@media (max-width: 960px) {
   .mode-nav { top: auto; bottom: 14px; max-width: calc(100vw - 24px); }
   /* 窄屏导航只留中文主标，拉丁副标藏起来，胶囊回到单行 */
   .nav-en { display: none; }
   .nav-pill { padding: 8px 16px; font-size: 14px; }
   .music-btn { top: 14px; right: 14px; }
   .music-player { top: 66px; right: 14px; width: min(286px, calc(100vw - 28px)); }
-  .admin-btn { top: 14px; right: 64px; }
-  .settings-btn { top: 14px; right: 114px; }
+  .admin-btn { top: 14px; right: 114px; }
+  .settings-btn { top: 14px; right: 164px; }
   .settings-pop { top: 66px; right: 14px; }
   .mode-page { padding: 84px 14px 110px; }
   #page-slideshow, #page-galaxy { padding: 0; }
