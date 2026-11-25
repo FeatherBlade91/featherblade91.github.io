@@ -8,8 +8,12 @@
   const list = byId('wishList'), empty = byId('wishEmpty'), notice = byId('wishNotice');
   const progress = byId('wishProgress'), addButton = byId('wishAdd');
   const table = 'forever_wishes';
-  const columns = 'id,title,detail,author,created_at,done_on,done_by,done_note,done_photos';
-  const MAX_PHOTOS = 10;
+  const columns = 'id,title,detail,author,created_at,done_on,done_by,done_note,done_photos,done_album';
+  const MAX_UPLOADS = 10;  // done_photos：本次新上传的照片（数据库上限）
+  const MAX_PICKED = 24;   // done_album：从相册里挑的老照片（数据库上限）
+  const isUuid = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  // 心愿里存着两种照片凭据：上传过的用 uuid，相册里的老照片用 photos/ 路径
+  const photoKeys = w => [...(w.done_photos || []), ...(w.done_album || [])];
   let wishes = [], me = null, filter = 'all', loaded = false, syncing = false, again = false;
 
   const node = (tag, className, text) => {
@@ -54,7 +58,8 @@
     body.append(meta);
     if (w.done_on) {
       if (w.done_note) body.append(node('p', 'wish-note', w.done_note));
-      if (w.done_photos?.length) body.append(photoStrip(w.done_photos));
+      const keys = photoKeys(w);
+      if (keys.length) body.append(photoStrip(keys));
     }
     li.append(mark, body);
     {
@@ -75,10 +80,10 @@
     }
     return li;
   }
-  function photoStrip(ids) {
+  function photoStrip(keys) {
     const strip = node('div', 'wish-photos');
-    for (const id of ids) {
-      const p = window.ForeverAlbum?.findUpload(id);
+    for (const key of keys) {
+      const p = window.ForeverAlbum?.findByKey(key);
       const b = node('button', 'wish-photo');
       b.type = 'button';
       if (p) {
@@ -89,7 +94,7 @@
         img.onerror = () => { img.onerror = null; img.src = p.src; };
         b.append(img, node('span', 'wish-photo-cap', p.caption));
         b.setAttribute('aria-label', `看照片「${p.caption}」的大图`);
-        b.addEventListener('click', () => window.ForeverAlbum.openUpload(id));
+        b.addEventListener('click', () => window.ForeverAlbum.openByKey(key));
       } else {
         // 未归档的照片只对登录成员可见；归档上线后所有人都能看
         b.disabled = true;
@@ -201,7 +206,138 @@
     title.focus();
   }
 
-  // 完成打卡：照片（每张要命名，同时进相册）和 / 或一段文字，至少一样
+  /* ---------- 相册选图器 ----------
+   * 整本相册的缩略图网格，按时间段筛选，点图选中 / 取消。
+   * 一次只允许开一个；关掉时把选好的 key 交回打卡弹窗。 */
+  const pickerDialog = node('dialog', 'wish-picker');
+  pickerDialog.setAttribute('aria-labelledby', 'wishPickerTitle');
+  document.body.append(pickerDialog);
+
+  function openPicker({ chosen, limit, onDone }) {
+    // 新的在前；同一刻（或都没有拍摄时间）的照片按名字排，顺序才稳定
+    const all = (window.ForeverAlbum?.listPhotos() || []).slice()
+      .sort((a, b) => (b.when || '').localeCompare(a.when || '') ||
+        a.caption.localeCompare(b.caption, 'zh-Hans-CN'));
+    let picked = new Set(chosen);
+    let from = '', to = '';
+
+    pickerDialog.replaceChildren();
+    const head = node('header');
+    const h = node('h2', '', '从相册里选照片');
+    h.id = 'wishPickerTitle';
+    const close = node('button', 'wish-close', '✕');
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭');
+    head.append(h, close);
+
+    // 时间段筛选：两个日期框 + 几个常用快捷段
+    const bar = node('div', 'wish-picker-bar');
+    const dateBox = node('div', 'wish-picker-dates');
+    const mkDate = (label, onInput) => {
+      const l = node('label', 'wish-picker-date');
+      const i = node('input');
+      i.type = 'date';
+      i.addEventListener('change', onInput);
+      l.append(node('span', '', label), i);
+      dateBox.append(l);
+      return i;
+    };
+    const fromInput = mkDate('从', () => { from = fromInput.value; renderGrid(); });
+    const toInput = mkDate('到', () => { to = toInput.value; renderGrid(); });
+
+    const quick = node('div', 'wish-picker-quick');
+    const dates = all.map(p => p.date).filter(Boolean).sort();
+    const shift = days => new Date(Date.now() + 8 * 3600e3 - days * 864e5).toISOString().slice(0, 10);
+    const ranges = [
+      { label: '全部', from: '', to: '' },
+      { label: '最近 7 天', from: shift(7), to: '' },
+      { label: '最近 30 天', from: shift(30), to: '' },
+      { label: '最近一年', from: shift(365), to: '' },
+    ];
+    // 相册里有哪些年份，就给哪些年份一个按钮
+    const years = [...new Set(dates.map(d => d.slice(0, 4)))].sort().reverse();
+    for (const y of years) ranges.push({ label: `${y} 年`, from: `${y}-01-01`, to: `${y}-12-31` });
+    const quickButtons = ranges.map(r => {
+      const b = node('button', 'wish-picker-chip', r.label);
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        from = r.from; to = r.to;
+        fromInput.value = from; toInput.value = to;
+        renderGrid();
+      });
+      quick.append(b);
+      return { b, r };
+    });
+    bar.append(dateBox, quick);
+
+    const count = node('p', 'wish-picker-count');
+    const grid = node('div', 'wish-picker-grid');
+    const none = node('p', 'wish-hint wish-picker-none');
+    const foot = node('div', 'wish-picker-foot');
+    const clear = node('button', 'wish-act', '清空选择');
+    clear.type = 'button';
+    clear.addEventListener('click', () => { picked = new Set(); renderGrid(); });
+    const confirm = node('button', 'wish-primary', '选好了');
+    confirm.type = 'button';
+    confirm.addEventListener('click', () => { onDone([...picked]); pickerDialog.close(); });
+    foot.append(clear, confirm);
+
+    function inRange(p) {
+      if (!from && !to) return true;
+      if (!p.date) return false; // 没有日期的照片只在「全部」里出现
+      return (!from || p.date >= from) && (!to || p.date <= to);
+    }
+    function renderGrid() {
+      const shown = all.filter(inRange);
+      quickButtons.forEach(({ b, r }) =>
+        b.setAttribute('aria-selected', String(r.from === from && r.to === to)));
+      grid.replaceChildren(...shown.map(p => {
+        const cell = node('button', 'wish-shot');
+        cell.type = 'button';
+        cell.setAttribute('aria-pressed', String(picked.has(p.key)));
+        const img = node('img');
+        img.alt = '';
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.src = p.thumb;
+        img.onerror = () => { img.onerror = null; img.src = p.src; };
+        const cap = node('span', 'wish-shot-cap', p.caption);
+        const when = node('span', 'wish-shot-date', p.when || '没有日期');
+        cell.append(img, node('span', 'wish-shot-tick', '✓'), cap, when);
+        cell.title = `${p.caption}${p.when ? ' · ' + p.when : ''}`;
+        cell.addEventListener('click', () => {
+          if (picked.has(p.key)) picked.delete(p.key);
+          else if (picked.size >= limit) { count.dataset.warn = '1'; renderCount(); return; }
+          else picked.add(p.key);
+          delete count.dataset.warn;
+          renderGrid();
+        });
+        return cell;
+      }));
+      none.hidden = shown.length > 0;
+      none.textContent = all.length
+        ? '这段时间里没有照片，换个时间段看看。'
+        : '相册还没有照片。可以先用下面的「上传新照片」添加。';
+      renderCount();
+    }
+    function renderCount() {
+      const scope = from || to
+        ? `这段时间 ${all.filter(inRange).length} 张 / 共 ${all.length} 张`
+        : `相册共 ${all.length} 张`;
+      count.textContent = count.dataset.warn
+        ? `最多选 ${limit} 张，先取消几张再选。`
+        : `${scope} · 已选 ${picked.size} 张`;
+      confirm.textContent = picked.size ? `选好了（${picked.size} 张）` : '选好了';
+    }
+    renderGrid();
+
+    close.addEventListener('click', () => pickerDialog.close());
+    pickerDialog.addEventListener('click', e => { if (e.target === pickerDialog) pickerDialog.close(); });
+    pickerDialog.append(head, bar, count, grid, none, foot);
+    pickerDialog.showModal();
+  }
+
+  // 完成打卡：以从相册选照片为主，也可以直接上传新照片，或者只写一段话
   function openDone(w) {
     if (!me) { auth.open(() => openDone(w)); return; }
     const { form, error } = shell(w.done_on ? '编辑打卡' : `完成打卡 · ${w.title}`);
@@ -214,25 +350,38 @@
     const note = textInput('note', w.done_note, 1000, true);
     note.placeholder = '那天发生了什么，想记下的话……';
 
-    // 已有照片可以移出打卡（照片本身仍留在相册里）
-    let kept = [...(w.done_photos || [])];
-    const keptBox = node('div', 'wish-pick-list');
+    // 已选中的相册照片（含上次打卡留下的），可以移出；照片本身仍留在相册里
+    let kept = photoKeys(w);
+    const keptBox = node('div', 'wish-chosen');
     function renderKept() {
-      keptBox.replaceChildren(...kept.map(id => {
-        const p = window.ForeverAlbum?.findUpload(id);
-        const item = node('div', 'wish-pick');
+      keptBox.replaceChildren(...kept.map(key => {
+        const p = window.ForeverAlbum?.findByKey(key);
+        const item = node('div', 'wish-chosen-item');
         const img = node('img');
         img.alt = '';
-        if (p) img.src = p.thumb;
-        const name = node('span', 'wish-pick-name', p ? p.caption : '照片归档中');
-        const x = node('button', 'wish-pick-remove', '移出');
+        img.loading = 'lazy';
+        if (p) {
+          img.src = p.thumb;
+          img.onerror = () => { img.onerror = null; img.src = p.src; };
+        }
+        const cap = node('span', 'wish-chosen-cap', p ? p.caption : '照片归档中');
+        const x = node('button', 'wish-chosen-remove', '✕');
         x.type = 'button';
         x.setAttribute('aria-label', `从打卡中移出 ${p ? p.caption : '这张照片'}`);
-        x.addEventListener('click', () => { kept = kept.filter(k => k !== id); renderKept(); });
-        item.append(img, name, x);
+        x.addEventListener('click', () => { kept = kept.filter(k => k !== key); renderKept(); });
+        item.append(img, cap, x);
         return item;
       }));
+      pickButton.textContent = kept.length ? `从相册里挑照片（已选 ${kept.length} 张）` : '从相册里挑照片';
+      keptEmpty.hidden = kept.length > 0;
     }
+    const pickButton = node('button', 'wish-pick-open', '从相册里挑照片');
+    pickButton.type = 'button';
+    pickButton.addEventListener('click', () => openPicker({
+      chosen: kept, limit: MAX_PICKED,
+      onDone: keys => { kept = keys; error.textContent = ''; renderKept(); },
+    }));
+    const keptEmpty = node('p', 'wish-hint', '还没挑照片。点上面的按钮翻相册，可以按时间段筛。');
     renderKept();
 
     // 新照片：每张一个必填名称（默认取文件名）
@@ -245,7 +394,7 @@
     picker.className = 'wish-file';
     picker.addEventListener('change', () => {
       for (const file of picker.files) {
-        if (kept.length + fresh.length >= MAX_PHOTOS) { error.textContent = `每个心愿最多 ${MAX_PHOTOS} 张照片。`; break; }
+        if (fresh.length >= MAX_UPLOADS) { error.textContent = `一次最多上传 ${MAX_UPLOADS} 张新照片。`; break; }
         const entry = { file, uploadId: null, url: URL.createObjectURL(file) };
         entry.name = textInput('photoName', file.name.replace(/\.[^.]+$/, '').slice(0, 200), 200);
         entry.name.required = true;
@@ -277,17 +426,27 @@
     dialog.addEventListener('close', () => fresh.forEach(f => URL.revokeObjectURL(f.url)), { once: true });
 
     const photos = node('div', 'wish-field');
-    photos.append(node('span', '', '照片（会同时放进相册，每张都要起名字）'), keptBox, freshBox, picker);
-    const hint = node('p', 'wish-hint', '照片和文字至少留下一样。每张不超过 12MB，支持 JPEG / PNG / WebP。');
+    photos.append(node('span', '', '这次打卡的照片'), pickButton, keptBox, keptEmpty);
+
+    // 相册里还没有的照片，可以当场上传（上传后也会进相册）
+    const uploadBox = node('details', 'wish-upload-more');
+    uploadBox.append(node('summary', '', '相册里没有？上传新照片'), freshBox, picker,
+      node('p', 'wish-hint', `每张都要起个名字，会同时放进相册。一次最多 ${MAX_UPLOADS} 张，每张不超过 12MB，支持 JPEG / PNG / WebP。`));
+    if (fresh.length) uploadBox.open = true;
+
+    const hint = node('p', 'wish-hint', '照片和文字至少留下一样。');
     const { row, button } = submitRow(w.done_on ? '保存打卡' : '打卡完成', error);
-    form.append(field('完成日期', date), photos, field('想说的话', note), hint, row);
+    form.append(field('完成日期', date), photos, uploadBox, field('想说的话', note), hint, row);
 
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const text = note.value.trim();
       if (!date.value) { error.textContent = '请选择完成日期。'; return; }
-      if (!text && !kept.length && !fresh.length) { error.textContent = '至少放一张照片，或者写几句话。'; return; }
-      if (fresh.some(f => !f.name.value.trim())) { error.textContent = '每张照片都需要一个名字。'; return; }
+      if (!text && !kept.length && !fresh.length) { error.textContent = '至少挑一张照片，或者写几句话。'; return; }
+      if (fresh.some(f => !f.name.value.trim())) { error.textContent = '每张新照片都需要一个名字。'; return; }
+      if (kept.filter(isUuid).length + fresh.length > MAX_UPLOADS) {
+        error.textContent = `上传的照片一次最多 ${MAX_UPLOADS} 张（含上次打卡留下的）。`; return;
+      }
       error.textContent = '';
       await busy(button, async () => {
         try {
@@ -300,9 +459,11 @@
             renderFresh();
           }
           button.textContent = '正在保存';
+          // 上传过的照片按 uuid 存 done_photos，相册里的老照片按路径存 done_album
           check(await client.from(table).update({
             done_on: date.value, done_note: text,
-            done_photos: [...kept, ...fresh.map(f => f.uploadId)],
+            done_photos: [...kept.filter(isUuid), ...fresh.map(f => f.uploadId)],
+            done_album: kept.filter(k => !isUuid(k)),
           }).eq('id', w.id));
           dialog.close();
           window.ForeverUploads.refresh();

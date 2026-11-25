@@ -2435,6 +2435,30 @@ const ModeSettings = {
     findUpload(id) {
       const p = PHOTOS.find(x => x.uploadId === id);
       return p ? { thumb: thumbSrc(p), src: p.src, caption: photoName(p) } : null;
+    },
+    /* 心愿打卡的选图器用：整本相册的轻量清单。
+     * key 是存进心愿里的凭据——上传过的照片用 uploadId（uuid，存 done_photos），
+     * 相册里的老照片用 src 路径（存 done_album）。 */
+    listPhotos() {
+      return PHOTOS.map(p => ({
+        key: p.uploadId || p.src,
+        uploadId: p.uploadId || null,
+        src: p.src, thumb: thumbSrc(p),
+        caption: photoName(p),
+        date: p.date || '', when: photoDateLabel(p),
+      }));
+    },
+    // 按上面的 key 找一张照片，找不到返回 null（例如照片已从相册里移除）
+    findByKey(key) {
+      const p = PHOTOS.find(x => (x.uploadId || x.src) === key);
+      return p ? {
+        key, uploadId: p.uploadId || null, src: p.src, thumb: thumbSrc(p),
+        caption: photoName(p), date: p.date || '', when: photoDateLabel(p),
+      } : null;
+    },
+    openByKey(key) {
+      const i = PHOTOS.findIndex(p => (p.uploadId || p.src) === key);
+      if (i >= 0) Lightbox.open(i);
     }
   };
   window.dispatchEvent(new Event('forever-album-ready'));
