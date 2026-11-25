@@ -26,7 +26,7 @@
   function render() {
     const done = wishes.filter(w => w.done_on).length;
     progress.textContent = wishes.length ? `已经一起完成 ${done} / ${wishes.length} 件` : '';
-    addButton.hidden = !me;
+    addButton.hidden = false; // 未登录也显示，点了先登录
     const shown = wishes
       .filter(w => filter === 'all' || (filter === 'done') === !!w.done_on)
       // 没做的在前（按许愿先后），做完的在后（最近完成的在前）
@@ -35,7 +35,7 @@
     list.replaceChildren(...shown.map(card));
     empty.hidden = !loaded || shown.length > 0;
     empty.textContent = !wishes.length
-      ? (me ? '还没有心愿。点「许个心愿」写下第一件想一起做的事。' : '还没有心愿。')
+      ? (me ? '还没有心愿。点「许个心愿」写下第一件想一起做的事。' : '还没有心愿。登录后点「许个心愿」写下第一件想一起做的事。')
       : filter === 'done' ? '还没有完成的心愿，加油呀。' : '心愿都完成啦！再许一个吧。';
   }
   function card(w) {
@@ -57,7 +57,7 @@
       if (w.done_photos?.length) body.append(photoStrip(w.done_photos));
     }
     li.append(mark, body);
-    if (me) {
+    {
       const actions = node('div', 'wish-actions');
       const act = (label, fn, cls = '') => {
         const b = node('button', 'wish-act' + cls, label);
@@ -332,10 +332,12 @@
     button.focus();
   }
   function undo(w) {
+    if (!me) { auth.open(() => undo(w)); return; }
     confirmBox('撤销完成', `「${w.title}」会回到「还想做」，打卡的文字会清空。照片仍保留在相册里。`, '撤销完成',
       async () => check(await client.from(table).update({ done_on: null }).eq('id', w.id)));
   }
   function remove(w) {
+    if (!me) { auth.open(() => remove(w)); return; }
     confirmBox('删除心愿', `确定删除「${w.title}」吗？删除后无法恢复；打卡用过的照片仍保留在相册里。`, '删除',
       async () => check(await client.from(table).delete().eq('id', w.id)));
   }
@@ -347,7 +349,7 @@
     render();
   }));
   addButton.addEventListener('click', () => openEdit(null));
-  if (!client) { notice.textContent = '心愿清单加载失败，请刷新页面重试。'; addButton.hidden = true; return; }
+  if (!client) { notice.textContent = '心愿清单加载失败，请刷新页面重试。'; return; }
   auth.onChange(state => {
     me = state?.name || null;
     if (!me && dialog.open) dialog.close();
