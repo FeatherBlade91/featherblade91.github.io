@@ -3,7 +3,7 @@
  * 泡泡与星光背景 / 灯箱 / 悄悄话 / 音乐开关
  * ============================================================ */
 
-let PHOTOS = []; // { src, date, caption, milestone }
+let PHOTOS = []; // { src, date, captureTime?, caption, milestone }
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -17,6 +17,8 @@ const rand = (min, max) => min + Math.random() * (max - min);
 const photoName = (p) =>
   (p.caption || "").trim() ||
   decodeURIComponent(p.src.split("/").pop() || "").replace(/\.[^.]+$/, "");
+// 相机记录的是拍摄地的钟表时间，直接显示，避免浏览器按时区换算。
+const photoDateTime = (p) => p.date && p.captureTime ? p.date + " " + p.captureTime : (p.date || "");
 // 列表场景用 thumbs/ 小图（由 tools/make_thumbs.py 生成），加载失败回退原图
 const thumbSrc = (p) => p.thumb || p.src.replace(/^photos\//, "thumbs/");
 function setThumb(img, p) {
@@ -85,7 +87,7 @@ async function loadPhotos() {
   } catch (e) {
     PHOTOS = [];
   }
-  PHOTOS.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  PHOTOS.sort((a, b) => photoDateTime(a).localeCompare(photoDateTime(b)));
 }
 
 /* ---------- 背景：泡泡 + 星光 ---------- */
@@ -832,7 +834,7 @@ const Ring = {
     s.cap.textContent = photoName(p);
     // 奶油纸背：照片名是唯一主角，日期有就带上一小行
     s.backName.textContent = photoName(p);
-    s.backDate.textContent = p.date || "";
+    s.backDate.textContent = photoDateTime(p);
   },
   fitCard(s) {
     const nw = s.img.naturalWidth, nh = s.img.naturalHeight;
@@ -864,7 +866,7 @@ const Ring = {
     box.replaceChildren(name);
     if (p.date) {
       const d = el("span", "rn-date");
-      d.textContent = p.date;
+      d.textContent = photoDateTime(p);
       box.appendChild(d);
     }
   },
@@ -2045,7 +2047,7 @@ const Slideshow = {
     const cap = $("#slideCaption");
     $("#slideCapTitle").textContent = name;
     const d = $("#slideCapDate");
-    d.textContent = p.date || "";
+    d.textContent = photoDateTime(p);
     d.style.display = p.date ? "" : "none";
     cap.style.display = name ? "" : "none";
     $("#slideCounter").textContent =
@@ -2082,7 +2084,7 @@ function buildTimeline() {
     // 日期、标题留空则不显示对应词条
     if (p.date || p.milestone || hit) {
       const date = el("div", "tl-date");
-      date.textContent = p.date || "";
+      date.textContent = photoDateTime(p);
       if (p.milestone || hit) {
         const tag = el("span", "tl-milestone");
         tag.textContent = hit ? hit.title : "纪念日";
@@ -2152,7 +2154,9 @@ const Lightbox = {
     const p = PHOTOS[this.idx];
     $("#lbImg").src = p.src;
     $("#lbImg").alt = photoName(p);
-    $("#lbCaption").textContent = photoName(p);
+    $("#lbCaption").textContent = p.date && p.captureTime
+      ? photoName(p) + " · " + photoDateTime(p)
+      : photoName(p);
   },
 };
 
