@@ -335,6 +335,9 @@ const PhotoWall = {
   COVER_COUNT: 6,
   loved: new Set(),
   onlyLoved: false,
+  years: [],
+  selectedYear: null,
+  monthSections: [],
   io: null,
   init() {
     try { this.loved = new Set(JSON.parse(localStorage.getItem(this.LOVED_KEY) || "[]")); } catch (e) { /* 坏数据当空 */ }
@@ -343,6 +346,35 @@ const PhotoWall = {
       this.onlyLoved = !this.onlyLoved;
       this.applyFilter();
     });
+    const stepYear = (step) => {
+      const year = this.years[this.years.indexOf(this.selectedYear) + step];
+      if (year === undefined) return;
+      const section = this.monthSections.find(s => s.dataset.year === year);
+      this.selectMonth(section);
+      this.jumpToMonth(section, "instant");
+    };
+    $("#wallNewer").addEventListener("click", () => stepYear(-1));
+    $("#wallOlder").addEventListener("click", () => stepYear(1));
+    const nav = $("#wallTime");
+    let start = null;
+    nav.addEventListener("touchstart", e => {
+      start = e.touches.length === 1 ? e.touches[0] : null;
+    }, { passive: true });
+    nav.addEventListener("touchcancel", () => { start = null; });
+    nav.addEventListener("touchend", e => {
+      if (!start) return;
+      const dx = e.changedTouches[0].clientX - start.clientX;
+      const dy = e.changedTouches[0].clientY - start.clientY;
+      start = null;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (e.cancelable) e.preventDefault();
+        stepYear(dx < 0 ? 1 : -1);
+      }
+    }, { passive: false });
+    let frame = 0;
+    window.addEventListener("scroll", () => {
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; this.syncMonth(); });
+    }, { passive: true });
     // 卡片进入视口才淡入；不支持 IO 的浏览器直接显示
     if ("IntersectionObserver" in window) {
       this.io = new IntersectionObserver((list) => {
@@ -426,11 +458,48 @@ const PhotoWall = {
     const keys = new Set(PHOTOS.map(this.key));
     $("#wallLovedN").textContent = [...this.loved].filter((k) => keys.has(k)).length;
   },
+  jumpToMonth(section, behavior) {
+    const bar = $("#wallTime").parentElement;
+    const offset = parseFloat(getComputedStyle(bar).top) + bar.offsetHeight + 12;
+    window.scrollTo({ top: window.scrollY + section.getBoundingClientRect().top - offset, behavior });
+  },
+  selectMonth(section) {
+    const year = section.dataset.year;
+    const current = section.id;
+    const months = $("#wallMonths");
+    if (months.dataset.current === current) return;
+    months.dataset.current = current;
+    this.selectedYear = year;
+    $("#wallYear").textContent = year ? year + "年" : "未标日期";
+    $("#wallNewer").disabled = year === this.years[0];
+    $("#wallOlder").disabled = year === this.years[this.years.length - 1];
+    for (const chip of months.children) {
+      chip.hidden = chip.dataset.year !== year;
+      if (chip.getAttribute("aria-controls") === current) chip.setAttribute("aria-current", "location");
+      else chip.removeAttribute("aria-current");
+    }
+  },
+  syncMonth() {
+    if (!this.monthSections.length || this.onlyLoved || !$("#page-home").classList.contains("active")) return;
+    const edge = $("#wallTime").parentElement.getBoundingClientRect().bottom + 16;
+    let current = this.monthSections[0];
+    for (const section of this.monthSections) {
+      if (section.getBoundingClientRect().top > edge) break;
+      current = section;
+    }
+    // 最后一个月照片少时，页底会先于月份标题到达。
+    if (Math.ceil(window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight) {
+      current = this.monthSections[this.monthSections.length - 1];
+    }
+    this.selectMonth(current);
+  },
   build() {
     const body = $("#wallBody");
     const months = $("#wallMonths");
     body.replaceChildren();
     months.replaceChildren();
+    delete months.dataset.current;
+    this.monthSections = [];
     // 每次重建都按拍摄时间从新到旧；相同时沿用相册顺序，未标日期的排在最后。
     this.order = PHOTOS.map((_, i) => i).sort((a, b) =>
       photoDateTime(PHOTOS[b]).localeCompare(photoDateTime(PHOTOS[a])));
@@ -447,6 +516,8 @@ const PhotoWall = {
       const lab = this.monthLabel(ym);
       const sec = el("section", "wall-month");
       sec.id = "wall-" + (ym || "someday");
+      sec.dataset.year = ym.slice(0, 4);
+      this.monthSections.push(sec);
       const h = el("h3", "wm-head");
       const zh = el("span", "wm-zh");
       zh.textContent = lab.zh;
@@ -469,9 +540,17 @@ const PhotoWall = {
       chip.type = "button";
       chip.textContent = ym ? lab.short : "未标日期";
       chip.title = lab.zh;
-      chip.addEventListener("click", () => sec.scrollIntoView({ behavior: "smooth" }));
+      chip.dataset.year = sec.dataset.year;
+      chip.setAttribute("aria-label", ym ? sec.dataset.year + "年" + lab.short : "未标日期");
+      chip.setAttribute("aria-controls", sec.id);
+      chip.addEventListener("click", () => {
+        this.jumpToMonth(sec, matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth");
+      });
       months.appendChild(chip);
     }
+    this.years = [...new Set(this.monthSections.map(s => s.dataset.year))];
+    if (this.monthSections.length) this.selectMonth(this.monthSections[0]);
+    this.syncMonth();
     this.buildCover();
     this.updateCount();
     this.applyFilter();
@@ -502,7 +581,8 @@ const PhotoWall = {
       sec.hidden = n === 0;
       shown += n;
     });
-    $("#wallMonths").hidden = this.onlyLoved;
+    $("#wallTime").hidden = this.onlyLoved || !this.monthSections.length;
+    if (!this.onlyLoved) this.syncMonth();
     $("#wallEmpty").hidden = !(this.onlyLoved && shown === 0);
   },
 };

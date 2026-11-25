@@ -662,13 +662,21 @@ body[data-mode="slideshow"] .nav-pill.active {
 .wall-sub { font-family: var(--font-serif); font-size: 14px; letter-spacing: 2px; color: var(--ink-soft); }
 .wall-tools {
   position: sticky; top: 92px; z-index: 20;
-  display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
-  margin: -22px auto 40px; padding: 6px; width: fit-content; max-width: 100%;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin: -22px auto 40px; padding: 6px; width: min(100%, 860px);
   background: var(--chrome-bg); border: 1px solid var(--chrome-border); border-radius: 999px;
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); box-shadow: var(--shadow-soft);
 }
-.wall-months { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
-.wall-months[hidden] { display: none; }
+.wall-tools:has(.wall-time[hidden]) { width: fit-content; }
+.wall-time { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; touch-action: pan-y pinch-zoom; }
+.wall-time[hidden], .wm-chip[hidden] { display: none; }
+.wall-years { display: flex; align-items: center; gap: 2px; flex: none; }
+#wallYear { font: 600 18px/1.2 var(--font-serif); letter-spacing: .03em; white-space: nowrap; }
+.wall-year-step { width: 34px; height: 36px; border-radius: 50%; color: var(--ink); font: 24px/1 var(--font-main); }
+.wall-year-step:hover:enabled, .wm-chip[aria-current="location"] { color: var(--ink); background: var(--pink-1); }
+.wall-year-step:disabled { opacity: .28; cursor: default; }
+.wall-months { display: flex; flex: 1; flex-wrap: wrap; justify-content: center; gap: 2px; }
+.wall-loved { flex: none; }
 .wm-chip, .wall-loved {
   padding: 6px 14px; border-radius: 999px; font-size: 13px; letter-spacing: 1px; color: var(--ink);
   transition: background 0.25s ease, color 0.25s ease, transform 0.25s var(--ease-out);
@@ -1149,7 +1157,13 @@ body[data-mode="slideshow"] .nav-pill.active {
   .home-cover { padding: 40px 0 90px; min-height: calc(100vh - 84px); }
   .scroll-hint { bottom: 18px; }
   .wall { padding: 20px 0 30px; }
-  .wall-tools { top: 70px; border-radius: 22px; }
+  .wall-tools { top: 70px; display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 6px 10px; border-radius: 22px; width: min(100%, 440px); }
+  .wall-time { display: contents; }
+  .wall-years { grid-column: 1; grid-row: 1; justify-self: start; touch-action: pan-y pinch-zoom; }
+  .wall-months { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: repeat(auto-fit, minmax(34px, 1fr)); touch-action: pan-y pinch-zoom; }
+  .wall-months .wm-chip { padding: 7px 2px; }
+  .wall-loved { grid-column: 2; grid-row: 1; justify-self: end; }
+  .wall-tools:has(.wall-time[hidden]) { display: flex; }
   .wm-grid { grid-template-columns: repeat(2, 1fr); gap: 26px 16px; padding: 0 4px; }
   .wm-grid .pc-big { grid-column: span 2; grid-row: auto; }
   .pc { padding: 7px 7px 0; }

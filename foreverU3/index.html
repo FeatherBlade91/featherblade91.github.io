@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💗</text></svg>" />
   <link rel="preload" href="fonts/cormorantgaramond-600i-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="css/fonts.css?v=20261125" />
-  <link rel="stylesheet" href="css/style.css?v=20261125-wall-order" />
+  <link rel="stylesheet" href="css/style.css?v=20261125-wall-year" />
   <link rel="stylesheet" href="css/chat.css?v=20261125" />
   <link rel="stylesheet" href="css/questions.css?v=20260925" />
 </head>
@@ -112,7 +112,14 @@
           <p class="wall-sub" id="wallSub"></p>
         </header>
         <div class="wall-tools">
-          <nav class="wall-months" id="wallMonths" aria-label="按月份跳转"></nav>
+          <nav class="wall-time" id="wallTime" aria-label="按年份和月份浏览照片">
+            <div class="wall-years">
+              <button type="button" class="wall-year-step" id="wallNewer" aria-label="切换到较新的年份" title="较新的年份">‹</button>
+              <strong id="wallYear" aria-live="polite"></strong>
+              <button type="button" class="wall-year-step" id="wallOlder" aria-label="切换到较早的年份" title="较早的年份">›</button>
+            </div>
+            <div class="wall-months" id="wallMonths"></div>
+          </nav>
           <button class="wall-loved" id="wallLoved" type="button" aria-pressed="false">
             <svg viewBox="0 0 100 92" aria-hidden="true"><path d="M50 84 C22 62 4 44 4 26 C4 11 15 3 27 3 C37 3 45 9 50 18 C55 9 63 3 73 3 C85 3 96 11 96 26 C96 44 78 62 50 84 Z"/></svg>
             只看心动 <span class="wall-loved-n" id="wallLovedN">0</span>
@@ -264,7 +271,7 @@
   </dialog>
   <script src="js/config.js"></script>
   <script src="js/music.js?v=20260825"></script>
-  <script src="js/main.js?v=20261125-phone-dates"></script>
+  <script src="js/main.js?v=20261125-wall-year"></script>
   <script defer src="js/vendor/supabase-2.117.1.js"></script>
   <script defer src="js/chat-config.js?v=5244cf04"></script>
   <link rel="stylesheet" href="css/auth.css?v=20261125" />
